@@ -1,0 +1,114 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Claude Dash case render</title>
+<style>html,body{margin:0;height:100%;background:#f4f3ef;overflow:hidden}canvas{display:block}</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from "three";
+import { STLLoader } from "three/addons/loaders/STLLoader.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+const q = new URLSearchParams(location.search);
+const concept = q.get("concept") || "halo";
+const view = q.get("view") || "front34";
+const stand = q.get("stand") || "#e8e6e1";     // body colour
+const dark = q.get("dark") === "1";
+
+document.documentElement.style.background = document.body.style.background = dark ? "#1b1b1a" : "#f4f3ef";
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(1);
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = dark ? 0.9 : 1.05;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(dark ? "#1b1b1a" : "#f4f3ef");
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(26, innerWidth / innerHeight, 1, 5000);
+camera.up.set(0, 0, 1);
+const views = {
+  front34: [[-170, -330, 150], [0, 0, 48]],
+  front:   [[0, -380, 80], [0, 0, 50]],
+  side:    [[-380, 0, 70], [0, 0, 48]],
+  back34:  [[200, 300, 160], [0, 0, 48]],
+};
+const [eye, target] = views[view] || views.front34;
+camera.position.set(...eye);
+camera.lookAt(...target);
+
+// lights
+scene.add(new THREE.HemisphereLight(0xffffff, dark ? 0x222222 : 0xd8d4cc, dark ? 0.35 : 0.6));
+const key = new THREE.DirectionalLight(0xffffff, dark ? 1.6 : 1.9);
+key.position.set(-160, -220, 320);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+Object.assign(key.shadow.camera, { left: -160, right: 160, top: 160, bottom: -160, near: 10, far: 900 });
+key.shadow.radius = 6;
+scene.add(key);
+const rim = new THREE.DirectionalLight(0xffffff, 0.6);
+rim.position.set(200, 260, 120);
+scene.add(rim);
+
+// floor that only shows the shadow
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), new THREE.ShadowMaterial({ opacity: dark ? 0.5 : 0.18 }));
+floor.receiveShadow = true;
+scene.add(floor);
+
+const mats = {
+  puck: new THREE.MeshPhysicalMaterial({ color: stand, roughness: 0.42, metalness: 0.0, clearcoat: 0.25, clearcoatRoughness: 0.5 }),
+  stand: new THREE.MeshPhysicalMaterial({ color: stand, roughness: 0.42, metalness: 0.0, clearcoat: 0.25, clearcoatRoughness: 0.5 }),
+  ring: new THREE.MeshPhysicalMaterial({ color: "#141413", roughness: 0.32, metalness: 0.1 }),
+};
+
+const loader = new STLLoader();
+const load = (name) => new Promise((ok) => loader.load(`meshes/${concept}_${name}.stl`, (g) => {
+  g.computeVertexNormals();
+  const m = new THREE.Mesh(g, mats[name]);
+  m.castShadow = true; m.receiveShadow = true;
+  scene.add(m); ok();
+}));
+
+const screen = await (await fetch("meshes/screen.json")).json();
+const n = new THREE.Vector3(...screen.normal), up = new THREE.Vector3(...screen.up);
+const glassFront = new THREE.Vector3(...screen.center).addScaledVector(n, -screen.recess);
+const basis = new THREE.Matrix4().makeBasis(new THREE.Vector3().crossVectors(up, n), up, n);
+
+function disc(r, material, offset) {
+  const m = new THREE.Mesh(new THREE.CircleGeometry(r, 128), material);
+  m.applyMatrix4(basis);
+  m.position.copy(glassFront).addScaledVector(n, offset);
+  scene.add(m);
+  return m;
+}
+disc(screen.glass_r, new THREE.MeshPhysicalMaterial({ color: "#050505", roughness: 0.08, clearcoat: 1, clearcoatRoughness: 0.05 }), -0.05);
+const tex = await new THREE.TextureLoader().loadAsync("screen.png");
+tex.colorSpace = THREE.SRGBColorSpace;
+// the screenshot's round display fills ~92% of the image width
+const k = 0.923;
+tex.repeat.set(k, k);
+tex.offset.set((1 - k) / 2, (1 - k) / 2);
+disc(screen.active_r, new THREE.MeshBasicMaterial({ map: tex, toneMapped: false }), 0.02);
+// a soft reflection on the glass
+disc(screen.glass_r, new THREE.MeshPhysicalMaterial({ color: "#ffffff", transparent: true, opacity: 0.05, roughness: 0.0, clearcoat: 1 }), 0.06);
+
+await Promise.all(["puck", "ring", "stand"].map(load));
+renderer.render(scene, camera);
+window.renderDone = true;
+</script>
+</body>
+</html>

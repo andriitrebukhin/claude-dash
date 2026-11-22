@@ -14,3 +14,6 @@ __pycache__/
 build/
 dist/
 _site/
+case/render/meshes/
+case/render/screen.png
+__pycache__/
