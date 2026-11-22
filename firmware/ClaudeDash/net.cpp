@@ -17,6 +17,7 @@
 #include <esp_mac.h>
 #include "config.h"
 #include "dash_state.h"
+#include "board.h"
 
 struct Decision { char id[24]; char behavior[8]; char answers[96]; };
 
@@ -464,8 +465,13 @@ static void postDecision(const Decision &d) {
 }
 
 // ---------------------------------------------------------------- wireless update
+// Writing flash briefly blocks PSRAM, where the RGB panel's frame buffer lives, so
+// the screen glitches during the install. Dim it so that's barely visible.
+#define UPDATE_BACKLIGHT 10
+
 static void updateFailed(const char *why) {
   Serial.printf("[ota] failed: %s\n", why);
+  board_set_backlight(BACKLIGHT_LEVEL);
   setMode(MODE_UPDATE, "UPDATE FAILED", "", why);
   waitMs(5000);
 }
@@ -481,8 +487,10 @@ static void doUpdate() {
   if (!ver[0] || !size) return;
 
   char sub[96];
-  snprintf(sub, sizeof(sub), "Installing %s. Keep the display powered.", ver);
+  snprintf(sub, sizeof(sub), "Installing %s. Keep it powered; the screen dims and may flicker.", ver);
   setMode(MODE_UPDATE, "UPDATING", "0%", sub);
+  vTaskDelay(pdMS_TO_TICKS(600));            // let the message show at full brightness first
+  board_set_backlight(UPDATE_BACKLIGHT);
   Serial.printf("[ota] %s -> %s (%u bytes)\n", DASH_VERSION, ver, (unsigned)size);
 
   HTTPClient http;
@@ -523,6 +531,7 @@ static void doUpdate() {
   http.end();
   if (written != len) { Update.abort(); updateFailed("Download interrupted."); return; }
   if (!Update.end(true)) { updateFailed(Update.getError() == UPDATE_ERROR_MD5 ? "Checksum mismatch." : Update.errorString()); return; }
+  board_set_backlight(BACKLIGHT_LEVEL);
   setMode(MODE_UPDATE, "UPDATED", ver, "Restarting...");
   Serial.printf("[ota] done, restarting into %s\n", ver);
   delay(1500);

@@ -25,6 +25,10 @@ void board_init() {
   lv_obj_clean(lv_scr_act());   // Waveshare's Lvgl_Init() adds a "Hello Ardino and LVGL!" demo label
 }
 
+void board_set_backlight(uint8_t level) {
+  Set_Backlight(level);
+}
+
 void board_loop() {
   Lvgl_Loop();
 }

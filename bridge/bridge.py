@@ -624,12 +624,32 @@ def check_firmware(dash):
         dash.firmware = {"latest": tag, "size": len(data), "md5": hashlib.md5(data).hexdigest(), "path": str(path)}
 
 
+FIRMWARE_CHECK_MIN_GAP = 600   # seconds between release checks triggered by a display coming online
+_fw_lock = threading.Lock()
+_fw_last_check = [0.0]
+
+
+def check_firmware_safe(dash):
+    if not _fw_lock.acquire(blocking=False):
+        return
+    try:
+        _fw_last_check[0] = time.time()
+        check_firmware(dash)
+    except Exception as e:  # noqa: BLE001
+        print(f"Firmware check failed: {clip(str(e), 80)}", flush=True)
+    finally:
+        _fw_lock.release()
+
+
+def check_firmware_soon(dash):
+    """A display just came online (e.g. rebooted): look for a new release, rate-limited."""
+    if time.time() - _fw_last_check[0] > FIRMWARE_CHECK_MIN_GAP:
+        threading.Thread(target=check_firmware_safe, args=(dash,), daemon=True).start()
+
+
 def firmware_loop(dash):
     while True:
-        try:
-            check_firmware(dash)
-        except Exception as e:  # noqa: BLE001
-            print(f"Firmware check failed: {clip(str(e), 80)}", flush=True)
+        check_firmware_safe(dash)
         time.sleep(6 * 3600)
 
 
@@ -761,6 +781,9 @@ def make_handler(dash):
                     return self._send(401, {"error": "bad token"})
                 dev = self.headers.get("X-Device")
                 if dev:
+                    prev = dash.displays.get(clip(ascii_only(dev), 32))
+                    if (prev is None or time.time() - prev["seen"] > 120) and dash.conf.get("update_repo"):
+                        check_firmware_soon(dash)
                     dash.displays[clip(ascii_only(dev), 32)] = {
                         "fw": clip(ascii_only(self.headers.get("X-Fw", "")), 24),
                         "ip": self.client_address[0], "seen": int(time.time())}
@@ -919,6 +942,12 @@ def main():
         print(f"Port {conf['port']} busy - bridge already running?", flush=True)
         return
     srv.daemon_threads = True
+
+    def quiet_errors(request, client_address, _orig=srv.handle_error):
+        if isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError, TimeoutError)):
+            return   # a display rebooted or dropped Wi-Fi mid-request
+        _orig(request, client_address)
+    srv.handle_error = quiet_errors
     advertise(conf)
     threading.Thread(target=udp_discovery_loop, args=(conf,), daemon=True).start()
     if not args.demo:
