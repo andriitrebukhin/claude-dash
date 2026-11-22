@@ -311,7 +311,14 @@ static bool discover() {
   int pick = 0;
   for (int i = 0; i < n; i++)
     if (g_bridgeId.length() && MDNS.txt(i, "id") == g_bridgeId) { pick = i; break; }
-  g_base = "http://" + MDNS.address(pick).toString() + ":" + String(MDNS.port(pick));
+  IPAddress ip = MDNS.address(pick);
+  if (ip == IPAddress(0, 0, 0, 0)) {
+    // Bonjour answered with the service but no A record: resolve the host name,
+    // or fall back to the LAN broadcast.
+    ip = MDNS.queryHost(MDNS.hostname(pick), 2000);
+    if (ip == IPAddress(0, 0, 0, 0)) return discoverUdp();
+  }
+  g_base = "http://" + ip.toString() + ":" + String(MDNS.port(pick));
   Serial.printf("[net] found bridge %s (%d on LAN)\n", g_base.c_str(), n);
   return true;
 }

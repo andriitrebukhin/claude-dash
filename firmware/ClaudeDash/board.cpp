@@ -22,6 +22,7 @@ void board_init() {
   LCD_Init();                   // ST7701 reset+init, CST820 touch, backlight
   Set_Backlight(BACKLIGHT_LEVEL);
   Lvgl_Init();
+  lv_obj_clean(lv_scr_act());   // Waveshare's Lvgl_Init() adds a "Hello Ardino and LVGL!" demo label
 }
 
 void board_loop() {
