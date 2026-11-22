@@ -126,7 +126,7 @@ static void setButtonsEnabled(bool en) {
 static void onDecision(lv_event_t *e) {
   bool allow = (bool)(intptr_t)lv_event_get_user_data(e);
   if (!curPending[0]) return;
-  net_send_decision(curPending, allow);
+  net_send_decision(curPending, allow ? "allow" : "deny");
   markSent(curPending);
   setButtonsEnabled(false);
   lv_label_set_text(lblDecHint, allow ? "Allowed - sending..." : "Denied - sending...");
@@ -147,6 +147,154 @@ static lv_obj_t *button(lv_obj_t *parent, const char *txt, lv_color_t bg, int x,
   lv_obj_center(l);
   lv_obj_add_event_cb(b, onDecision, LV_EVENT_CLICKED, (void *)(intptr_t)allow);
   return b;
+}
+
+// ---------- multiple-choice questions (AskUserQuestion) ----------
+static lv_obj_t *qdlg, *lblQTitle, *lblQSession, *lblQText, *btnSkip, *btnDone;
+static lv_obj_t *optBtn[MAX_OPTIONS], *optLbl[MAX_OPTIONS];
+static PendingInfo curQ;                    // copy of the question set being answered
+static uint8_t qIdx = 0;
+static uint8_t qPicked[MAX_QUESTIONS];      // bitmask of chosen options per question
+
+static void setQuestionButtonsEnabled(bool en) {
+  for (int i = 0; i < MAX_OPTIONS; i++) {
+    if (en) lv_obj_clear_state(optBtn[i], LV_STATE_DISABLED); else lv_obj_add_state(optBtn[i], LV_STATE_DISABLED);
+  }
+  if (en) { lv_obj_clear_state(btnSkip, LV_STATE_DISABLED); lv_obj_clear_state(btnDone, LV_STATE_DISABLED); }
+  else    { lv_obj_add_state(btnSkip, LV_STATE_DISABLED);   lv_obj_add_state(btnDone, LV_STATE_DISABLED); }
+}
+
+static void showQuestion() {
+  const QuestionInfo &q = curQ.questions[qIdx];
+  const char *head = q.header[0] ? q.header : "QUESTION";
+  if (curQ.nQuestions > 1) lv_label_set_text_fmt(lblQTitle, "%s  %d/%d", head, qIdx + 1, curQ.nQuestions);
+  else lv_label_set_text(lblQTitle, head);
+  lv_label_set_text(lblQText, q.text);
+  for (int i = 0; i < MAX_OPTIONS; i++) {
+    if (i >= q.nOpts) { lv_obj_add_flag(optBtn[i], LV_OBJ_FLAG_HIDDEN); continue; }
+    lv_obj_clear_flag(optBtn[i], LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(optLbl[i], q.opts[i]);
+    lv_obj_clear_state(optBtn[i], LV_STATE_CHECKED);
+    if (q.multi) lv_obj_add_flag(optBtn[i], LV_OBJ_FLAG_CHECKABLE);
+    else lv_obj_clear_flag(optBtn[i], LV_OBJ_FLAG_CHECKABLE);
+  }
+  if (q.multi) {
+    lv_obj_clear_flag(btnDone, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(btnSkip, LV_ALIGN_BOTTOM_MID, -62, -46);
+  } else {
+    lv_obj_add_flag(btnDone, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(btnSkip, LV_ALIGN_BOTTOM_MID, 0, -46);
+  }
+  setQuestionButtonsEnabled(true);
+}
+
+static void sendAnswers() {
+  char json[96];
+  size_t n = snprintf(json, sizeof(json), "[");
+  for (int qi = 0; qi < curQ.nQuestions; qi++) {
+    n += snprintf(json + n, sizeof(json) - n, "%s[", qi ? "," : "");
+    bool first = true;
+    for (int i = 0; i < MAX_OPTIONS; i++)
+      if (qPicked[qi] & (1 << i)) { n += snprintf(json + n, sizeof(json) - n, "%s%d", first ? "" : ",", i); first = false; }
+    n += snprintf(json + n, sizeof(json) - n, "]");
+  }
+  snprintf(json + n, sizeof(json) - n, "]");
+  net_send_decision(curQ.id, "allow", json);
+  markSent(curQ.id);
+  setQuestionButtonsEnabled(false);
+  lv_label_set_text(lblQTitle, "ANSWER SENT");
+}
+
+static void nextQuestion() {
+  if (qIdx + 1 < curQ.nQuestions) { qIdx++; showQuestion(); }
+  else sendAnswers();
+}
+
+static void onOption(lv_event_t *e) {
+  int i = (int)(intptr_t)lv_event_get_user_data(e);
+  if (curQ.questions[qIdx].multi) {        // CHECKABLE already toggled the state
+    if (lv_obj_has_state(optBtn[i], LV_STATE_CHECKED)) qPicked[qIdx] |= (1 << i);
+    else qPicked[qIdx] &= ~(1 << i);
+    return;
+  }
+  qPicked[qIdx] = 1 << i;
+  nextQuestion();
+}
+
+static void onDone(lv_event_t *) {
+  if (!qPicked[qIdx]) { lv_label_set_text(lblQTitle, "PICK AT LEAST ONE"); return; }
+  nextQuestion();
+}
+
+static void onSkip(lv_event_t *) {
+  net_send_decision(curQ.id, "skip");
+  markSent(curQ.id);
+  setQuestionButtonsEnabled(false);
+  lv_label_set_text(lblQTitle, "ANSWER ON YOUR MAC");
+}
+
+static lv_obj_t *smallButton(lv_obj_t *parent, const char *txt, lv_color_t bg, lv_event_cb_t cb) {
+  lv_obj_t *b = lv_btn_create(parent);
+  lv_obj_set_size(b, 110, 38);
+  lv_obj_set_style_radius(b, 19, 0);
+  lv_obj_set_style_bg_color(b, bg, 0);
+  lv_obj_set_style_shadow_width(b, 0, 0);
+  lv_obj_set_style_bg_opa(b, LV_OPA_40, LV_STATE_DISABLED);
+  lv_obj_t *l = label(b, F_S, C_TEXT);
+  lv_label_set_text(l, txt);
+  lv_obj_center(l);
+  lv_obj_add_event_cb(b, cb, LV_EVENT_CLICKED, nullptr);
+  return b;
+}
+
+static void buildQuestionOverlay() {
+  qdlg = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(qdlg, 480, 480);
+  lv_obj_center(qdlg);
+  lv_obj_set_style_radius(qdlg, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(qdlg, C_BG, 0);
+  lv_obj_set_style_bg_opa(qdlg, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(qdlg, C_WEEK, 0);
+  lv_obj_set_style_border_width(qdlg, 5, 0);
+  lv_obj_set_style_pad_all(qdlg, 0, 0);
+  lv_obj_clear_flag(qdlg, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(qdlg, LV_OBJ_FLAG_HIDDEN);
+
+  lblQTitle = label(qdlg, F_S, C_ACCENT);
+  lv_obj_align(lblQTitle, LV_ALIGN_TOP_MID, 0, 44);
+  lblQSession = label(qdlg, F_S, C_MUTED);
+  lv_obj_align(lblQSession, LV_ALIGN_TOP_MID, 0, 66);
+
+  lblQText = label(qdlg, F_M, C_TEXT);
+  lv_obj_set_size(lblQText, 330, 84);
+  lv_obj_set_style_text_align(lblQText, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_long_mode(lblQText, LV_LABEL_LONG_DOT);
+  lv_obj_align(lblQText, LV_ALIGN_TOP_MID, 0, 92);
+
+  for (int i = 0; i < MAX_OPTIONS; i++) {
+    lv_obj_t *b = lv_btn_create(qdlg);
+    lv_obj_set_size(b, 300, 44);
+    lv_obj_align(b, LV_ALIGN_TOP_MID, 0, 186 + i * 50);
+    lv_obj_set_style_radius(b, 22, 0);
+    lv_obj_set_style_bg_color(b, C_CARD, 0);
+    lv_obj_set_style_bg_color(b, C_ACCENT, LV_STATE_CHECKED);
+    lv_obj_set_style_bg_color(b, C_ACCENT, LV_STATE_PRESSED);
+    lv_obj_set_style_border_color(b, C_TRACK, 0);
+    lv_obj_set_style_border_width(b, 2, 0);
+    lv_obj_set_style_shadow_width(b, 0, 0);
+    lv_obj_set_style_bg_opa(b, LV_OPA_40, LV_STATE_DISABLED);
+    optLbl[i] = label(b, F_S, C_TEXT);
+    lv_obj_set_width(optLbl[i], 270);
+    lv_obj_set_style_text_align(optLbl[i], LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(optLbl[i], LV_LABEL_LONG_DOT);
+    lv_obj_center(optLbl[i]);
+    lv_obj_add_event_cb(b, onOption, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    optBtn[i] = b;
+  }
+  btnSkip = smallButton(qdlg, "Skip", C_BTN, onSkip);
+  lv_obj_align(btnSkip, LV_ALIGN_BOTTOM_MID, 0, -46);
+  btnDone = smallButton(qdlg, "Done", C_ACCENT, onDone);
+  lv_obj_align(btnDone, LV_ALIGN_BOTTOM_MID, 62, -46);
 }
 
 // ---------- build ----------
@@ -289,6 +437,8 @@ void ui_init() {
 
   lblDecHint = label(dec, F_S, C_MUTED);
   lv_obj_align(lblDecHint, LV_ALIGN_BOTTOM_MID, 0, -42);
+
+  buildQuestionOverlay();
 }
 
 // ---------- update ----------
@@ -302,6 +452,7 @@ void ui_update(const DashState &s) {
   if (s.mode != MODE_RUN) {
     lv_obj_clear_flag(setupScr, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(dec, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(qdlg, LV_OBJ_FLAG_HIDDEN);
     curPending[0] = 0;
     lv_label_set_text(lblSetupTitle, s.setup.title);
     lv_label_set_text(lblSetupBig, s.setup.big);
@@ -381,8 +532,22 @@ void ui_update(const DashState &s) {
 
   if (!p) {
     lv_obj_add_flag(dec, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(qdlg, LV_OBJ_FLAG_HIDDEN);
     curPending[0] = 0;
+  } else if (p->nQuestions) {
+    lv_obj_add_flag(dec, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(qdlg, LV_OBJ_FLAG_HIDDEN);
+    if (strcmp(curPending, p->id)) {
+      strlcpy(curPending, p->id, sizeof(curPending));
+      memcpy(&curQ, p, sizeof(curQ));
+      qIdx = 0;
+      memset(qPicked, 0, sizeof(qPicked));
+      showQuestion();
+      board_beep();
+    }
+    lv_label_set_text_fmt(lblQSession, "%s - %ds", p->session, p->expiresIn);
   } else {
+    lv_obj_add_flag(qdlg, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(dec, LV_OBJ_FLAG_HIDDEN);
     if (strcmp(curPending, p->id)) {
       strlcpy(curPending, p->id, sizeof(curPending));

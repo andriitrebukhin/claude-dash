@@ -3,6 +3,8 @@
 
 #define MAX_SESSIONS 8
 #define MAX_PENDING  4
+#define MAX_QUESTIONS 4
+#define MAX_OPTIONS   4
 
 enum DashMode : uint8_t {
   MODE_BOOT,       // starting up
@@ -21,12 +23,22 @@ struct SessionInfo {
   uint8_t subagents;
 };
 
+struct QuestionInfo {     // one AskUserQuestion question
+  char header[20];
+  char text[164];
+  bool multi;
+  uint8_t nOpts;
+  char opts[MAX_OPTIONS][44];
+};
+
 struct PendingInfo {
   char id[24];
   char session[32];
   char tool[28];
   char detail[260];
   int  expiresIn;
+  uint8_t nQuestions;     // >0: a multiple-choice question instead of Allow/Deny
+  QuestionInfo questions[MAX_QUESTIONS];
 };
 
 struct UsageWindow {
@@ -62,4 +74,6 @@ struct DashState {
 void net_begin();
 // Copies the latest state into `out` if it changed since `lastSeq`. Returns true if copied.
 bool net_snapshot(DashState &out, uint32_t &lastSeq);
-void net_send_decision(const char *id, bool allow);
+// behavior: "allow" | "deny" | "skip". answersJson: for questions, JSON like [[0],[1,2]]
+// (chosen option indexes per question).
+void net_send_decision(const char *id, const char *behavior, const char *answersJson = nullptr);

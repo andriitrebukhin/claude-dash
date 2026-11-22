@@ -73,11 +73,17 @@ def main():
     except Exception:
         return
     decision = resp.get("decision")
-    if is_perm and decision in ("allow", "deny"):
-        d = {"behavior": decision}
-        if decision == "deny":
-            d["message"] = "Denied from the Claude Dash desk display."
-        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": d}}))
+    if not is_perm or not isinstance(decision, dict):
+        return   # no answer from the display: Claude Code shows its normal prompt
+    if decision.get("behavior") == "allow":
+        d = {"behavior": "allow"}
+        if isinstance(decision.get("updated_input"), dict):
+            d["updatedInput"] = decision["updated_input"]
+    elif decision.get("behavior") == "deny":
+        d = {"behavior": "deny", "message": "Denied from the Claude Dash desk display."}
+    else:
+        return
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": d}}))
 
 
 if __name__ == "__main__":

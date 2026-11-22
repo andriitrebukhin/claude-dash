@@ -5,6 +5,7 @@ A desk display for Claude Code on the Waveshare **ESP32-S3-Touch-LCD-2.1** (480�
 - **Usage rings**: the outer ring is the 5-hour limit, the inner ring is the weekly limit. Each shows a reset countdown.
 - **Sessions**: one row per Claude Code session, showing the project folder, what it's doing (tool and command or file), and how many subagents it's running. The dot shows the state: green = working, orange = needs you, amber = waiting, grey = idle.
 - **Decisions**: when Claude Code asks for permission, the display chirps and shows a full-screen **Allow / Deny** card. If you don't answer within the timeout (30 s by default), the normal terminal prompt takes over.
+- **Questions**: when Claude asks a multiple-choice question, the display shows each question with its options as buttons. Single-choice questions take one tap; multi-select questions toggle options and finish with **Done**. **Skip** hands the question back to the normal prompt. The display gets 50 s (`question_timeout`).
 
 ```
 Claude Code ──hooks──▶ bridge.py (your Mac, :8787) ◀──Wi-Fi── ESP32 display

@@ -17,7 +17,7 @@
 #include "config.h"
 #include "dash_state.h"
 
-struct Decision { char id[24]; bool allow; };
+struct Decision { char id[24]; char behavior[8]; char answers[96]; };
 
 static DashState g_state;
 static DashState g_tmp;               // parse buffer, only used by the net task
@@ -423,14 +423,28 @@ static bool parseState(const String &body, DashState &st) {
     cp(d.tool, sizeof(d.tool), p["tool"] | "");
     cp(d.detail, sizeof(d.detail), p["detail"] | "");
     d.expiresIn = p["expires_in"] | 0;
+    for (JsonVariantConst q : p["questions"].as<JsonArrayConst>()) {
+      if (d.nQuestions >= MAX_QUESTIONS) break;
+      QuestionInfo &qi = d.questions[d.nQuestions++];
+      cp(qi.header, sizeof(qi.header), q["h"] | "");
+      cp(qi.text, sizeof(qi.text), q["q"] | "");
+      qi.multi = q["multi"] | false;
+      for (JsonVariantConst o : q["opts"].as<JsonArrayConst>()) {
+        if (qi.nOpts >= MAX_OPTIONS) break;
+        cp(qi.opts[qi.nOpts++], sizeof(qi.opts[0]), o | "");
+      }
+    }
   }
   return true;
 }
 
 static void postDecision(const Decision &d) {
   String body;
-  int code = httpPost("/decision", String("{\"id\":\"") + d.id + "\",\"behavior\":\"" + (d.allow ? "allow" : "deny") + "\"}", body, true);
-  Serial.printf("[net] decision %s %s -> %d\n", d.id, d.allow ? "allow" : "deny", code);
+  String json = String("{\"id\":\"") + d.id + "\",\"behavior\":\"" + d.behavior + "\"";
+  if (d.answers[0]) json += String(",\"answers\":") + d.answers;
+  json += "}";
+  int code = httpPost("/decision", json, body, true);
+  Serial.printf("[net] decision %s %s %s -> %d\n", d.id, d.behavior, d.answers, code);
 }
 
 enum RunExit { EXIT_UNAUTHORIZED, EXIT_LOST };
@@ -514,9 +528,10 @@ bool net_snapshot(DashState &out, uint32_t &lastSeq) {
   return changed;
 }
 
-void net_send_decision(const char *id, bool allow) {
+void net_send_decision(const char *id, const char *behavior, const char *answersJson) {
   Decision d;
   cp(d.id, sizeof(d.id), id);
-  d.allow = allow;
+  cp(d.behavior, sizeof(d.behavior), behavior);
+  cp(d.answers, sizeof(d.answers), answersJson);
   xQueueSend(g_decQ, &d, 0);
 }

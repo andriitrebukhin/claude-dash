@@ -64,6 +64,7 @@ def load_conf():
         "token": secrets.token_urlsafe(12),
         "port": 8787,
         "decision_timeout": 30,   # seconds the display gets before the terminal prompt takes over
+        "question_timeout": 50,   # same for multiple-choice questions (keep below the hook timeout, 60)
         "usage_poll_secs": 120,
         "bridge_id": secrets.token_hex(4),
         "devices": {},            # paired displays: name -> token
@@ -318,27 +319,61 @@ class Dash:
                 s.update(state="idle", tool="", subagents=0, detail="finished - waiting for you")
 
     def wait_permission(self, ev):
+        """Block until the display answers. Returns None (no decision -> normal prompt)
+        or {"behavior": "allow"|"deny", "updated_input": {...}}."""
         sid = ev.get("session_id") or "unknown"
         tool = ev.get("tool_name", "")
+        tool_input = ev.get("tool_input") if isinstance(ev.get("tool_input"), dict) else {}
         pid = uuid.uuid4().hex[:10]
         p = {"id": pid, "sid": sid, "tool_raw": tool, "tool": tool_label(tool),
-             "detail": clip(summarize_tool(tool, ev.get("tool_input")), 600),
+             "detail": clip(summarize_tool(tool, tool_input), 600),
+             "input": tool_input, "questions": None, "timeout": self.conf["decision_timeout"],
              "created": time.time(), "event": threading.Event(), "decision": None}
+        if tool == "AskUserQuestion" and isinstance(tool_input.get("questions"), list):
+            p["questions"] = [{
+                "q": clip(q.get("question", ""), 200), "h": clip(q.get("header", ""), 16),
+                "multi": bool(q.get("multiSelect")),
+                "opts": [clip(o.get("label", ""), 40) for o in (q.get("options") or [])[:4] if isinstance(o, dict)],
+            } for q in tool_input["questions"][:4] if isinstance(q, dict)]
+            p["tool"] = "Question"
+            p["detail"] = clip(p["questions"][0]["q"] if p["questions"] else "", 600)
+            p["timeout"] = max(self.conf["decision_timeout"], self.conf.get("question_timeout", 50))
         with self.lock:
             s = self._session(sid, ev.get("cwd") or "")
             s.update(tool=p["tool"], detail=clip(p["detail"], 90))
             self.pending[pid] = p
-        got = p["event"].wait(self.conf["decision_timeout"])
+        got = p["event"].wait(p["timeout"])
         with self.lock:
             self.pending.pop(pid, None)
         return p["decision"] if got else None
 
-    def decide(self, pid, behavior):
+    def decide(self, pid, behavior, answers=None):
+        """behavior: allow | deny | skip (skip = let the normal prompt handle it).
+        answers: for questions, one list of chosen option indexes per question."""
         with self.lock:
             p = self.pending.get(pid)
-            if not p or behavior not in ("allow", "deny"):
+            if not p or behavior not in ("allow", "deny", "skip"):
                 return False
-            p["decision"] = behavior
+            if behavior == "skip":
+                p["decision"] = None
+            elif behavior == "deny":
+                p["decision"] = {"behavior": "deny"}
+            elif p["questions"] is not None:
+                qs = p["input"].get("questions") or []
+                if not isinstance(answers, list) or len(answers) < len(p["questions"]):
+                    return False
+                out = {}
+                for q, picked in zip(qs, answers):
+                    labels = [o.get("label", "") for o in (q.get("options") or [])]
+                    picked = picked if isinstance(picked, list) else [picked]
+                    chosen = [labels[i] for i in picked if isinstance(i, int) and 0 <= i < len(labels)]
+                    if not chosen:
+                        return False
+                    out[q.get("question", "")] = ", ".join(chosen)   # original labels, not the display's ASCII copy
+                p["decision"] = {"behavior": "allow", "updated_input": dict(p["input"], answers=out)}
+            else:
+                # Claude Code wants the input echoed back for tools like ExitPlanMode
+                p["decision"] = {"behavior": "allow", "updated_input": p["input"]}
             p["event"].set()
             return True
 
@@ -370,11 +405,12 @@ class Dash:
                 })
             sessions.sort(key=lambda x: x.pop("_k"))
             names = {sid: os.path.basename(s["cwd"].rstrip("/")) or sid[:8] for sid, s in self.sessions.items()}
-            pending = [{
+            pending = [dict({
                 "id": p["id"], "session": clip(names.get(p["sid"], p["sid"][:8]), 30),
                 "tool": clip(p["tool"], 26), "detail": p["detail"],
-                "expires_in": max(0, int(self.conf["decision_timeout"] - (now - p["created"]))),
-            } for p in sorted(self.pending.values(), key=lambda p: p["created"])]
+                "expires_in": max(0, int(p["timeout"] - (now - p["created"]))),
+            }, **({"questions": p["questions"]} if p["questions"] is not None else {}))
+                for p in sorted(self.pending.values(), key=lambda p: p["created"])]
             usage = dict(self.usage)
             # keep reset countdowns fresh between fetches
             for k in ("five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet"):
@@ -672,7 +708,7 @@ def make_handler(dash):
                 if not self._authed():
                     return self._send(401, {"error": "bad token"})
                 b = self._body()
-                ok = dash.decide(str(b.get("id", "")), b.get("behavior"))
+                ok = dash.decide(str(b.get("id", "")), b.get("behavior"), b.get("answers"))
                 return self._send(200 if ok else 404, {"ok": ok})
             self._send(404, {"error": "not found"})
 
@@ -739,9 +775,14 @@ const working=s.sessions.filter(x=>x.state=='working').length;
 $('st').textContent=new Date().toTimeString().slice(0,5)+' · '+working+' working';
 const p=s.pending.find(p=>!sent[p.id]);
 if(p){$('dec').style.display='block';if(cur!==p.id){cur=p.id;$('dt').textContent='PERMISSION NEEDED'+(s.pending.length>1?' · 1/'+s.pending.length:'');
-$('ds').textContent=p.session;$('dtool').textContent=p.tool;$('dbox').textContent=p.detail}$('dh').textContent='terminal takes over in '+p.expires_in+'s'}else{$('dec').style.display='none';cur=null}}
+$('ds').textContent=p.session;$('dtool').textContent=p.tool;curQ=p.questions||null;
+if(curQ){$('dbox').innerHTML=curQ.map((q,i)=>`<div style="margin-bottom:8px"><b>${esc(q.q)}</b>`+q.opts.map((o,j)=>`<label style="display:block"><input type="${q.multi?'checkbox':'radio'}" name="q${i}" value="${j}"> ${esc(o)}</label>`).join('')+'</div>').join('');$('allow').textContent='Answer';$('deny').textContent='Skip'}
+else{$('dbox').textContent=p.detail;$('allow').textContent='Allow';$('deny').textContent='Deny'}}$('dh').textContent='terminal takes over in '+p.expires_in+'s'}else{$('dec').style.display='none';cur=null}}
 function esc(t){return String(t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
-async function decide(b){if(!cur)return;sent[cur]=1;await fetch('/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:cur,behavior:b})});tick()}
+let curQ=null;
+async function decide(b){if(!cur)return;const body={id:cur,behavior:b};
+if(curQ){if(b==='deny')body.behavior='skip';else{body.answers=curQ.map((q,i)=>[...document.querySelectorAll(`input[name=q${i}]:checked`)].map(x=>+x.value));if(body.answers.some(a=>!a.length))return}}
+sent[cur]=1;await fetch('/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});tick()}
 $('allow').onclick=()=>decide('allow');$('deny').onclick=()=>decide('deny');
 async function pairs(){let l=[];try{l=await (await fetch('/pairings')).json()}catch(e){}
 const el=$('pair');if(!l.length){el.style.display='none';return}const p=l[0];el.style.display='block';
