@@ -860,48 +860,49 @@ def lan_ip():
 PREVIEW_HTML = r"""<!doctype html><html><head><meta charset="utf-8"><title>Claude Dash preview</title>
 <style>
 body{background:#000;margin:0;display:grid;place-items:center;height:100vh;font-family:-apple-system,Helvetica,sans-serif}
-#d{width:480px;height:480px;border-radius:50%;background:#141413;position:relative;overflow:hidden;color:#F0EEE6}
+#d{width:480px;height:480px;border-radius:50%;background:#141413;position:relative;overflow:hidden;color:#FAF9F5}
 svg{position:absolute;inset:0}
 .c{position:absolute;left:0;right:0;text-align:center}
-#pct{top:52px;font-size:40px;font-weight:600}#sub{top:104px;font-size:14px;color:#8A877D}#wk{top:126px;font-size:14px;color:#C2B8A3}
-#list{position:absolute;top:160px;left:70px;width:340px;height:210px;overflow:auto;display:flex;flex-direction:column;gap:6px}
-.row{background:#1E1D1A;border-radius:12px;padding:7px 10px 7px 26px;position:relative;height:36px;flex:none}
+#pct{top:60px;font-size:40px;font-weight:600}#sub{top:110px;font-size:14px;color:#87867F}#wk{top:132px;font-size:14px;color:#D4A27F}
+#list{position:absolute;top:164px;left:75px;width:330px;height:200px;overflow:auto;display:flex;flex-direction:column;gap:6px}
+.row{background:#1F1E1D;border-radius:12px;padding:7px 10px 7px 26px;position:relative;height:36px;flex:none}
 .dot{position:absolute;left:9px;top:19px;width:10px;height:10px;border-radius:50%}
-.nm{font-size:17px}.dt{font-size:13px;color:#8A877D;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:250px}
-.bd{position:absolute;right:10px;top:8px;font-size:13px;color:#8A877D}
-#st{bottom:46px;font-size:14px;color:#8A877D}
-#dec{position:absolute;inset:0;border-radius:50%;background:#141413;border:4px solid #D97757;box-sizing:border-box;display:none}
-#dt{top:58px;font-size:13px;color:#D97757;letter-spacing:1px}#ds{top:84px;font-size:18px}#dtool{top:110px;font-size:28px;font-weight:600}
-#dbox{position:absolute;top:161px;left:66px;width:316px;height:110px;background:#1E1D1A;border-radius:12px;padding:12px;font-size:14px;overflow:auto;white-space:pre-wrap;word-break:break-all}
-button{position:absolute;top:305px;width:150px;height:72px;border:0;border-radius:36px;font-size:20px;color:#F0EEE6;cursor:pointer}
-#deny{left:83px;background:#3A3935}#allow{left:243px;background:#D97757}
-#dh{bottom:40px;font-size:13px;color:#8A877D}
-#pair{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#F0EEE6;color:#141413;border-radius:16px;padding:18px 22px;display:none;text-align:center;box-shadow:0 8px 30px #0008;z-index:9}
+.nm{font-size:17px}.dt{font-size:13px;color:#87867F;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:250px}
+.bd{position:absolute;right:10px;top:8px;font-size:13px;color:#87867F}
+#st{bottom:46px;font-size:14px;color:#87867F}
+#dec{position:absolute;inset:0;border-radius:50%;background:#141413;border:4px solid #B1B9F9;box-sizing:border-box;display:none}
+#dt{top:58px;font-size:13px;color:#B1B9F9;letter-spacing:1px}#ds{top:84px;font-size:18px}#dtool{top:110px;font-size:28px;font-weight:600}
+#dbox{position:absolute;top:161px;left:66px;width:316px;height:110px;background:#1F1E1D;border-radius:12px;padding:12px;font-size:14px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+button{position:absolute;top:305px;width:150px;height:72px;border:0;border-radius:36px;font-size:20px;color:#FAF9F5;cursor:pointer}
+#deny{left:83px;background:#3D3D3A}#allow{left:243px;background:#D77757}
+#dh{bottom:40px;font-size:13px;color:#87867F}
+#pair{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#FAF9F5;color:#141413;border-radius:16px;padding:18px 22px;display:none;text-align:center;box-shadow:0 8px 30px #0008;z-index:9}
 #pair b{display:block;font-size:44px;letter-spacing:8px;margin:6px 0 10px}
 #pair button{position:static;width:auto;height:auto;padding:10px 20px;font-size:16px;border-radius:10px;margin:0 4px}
-#pair .ok{background:#D97757}#pair .no{background:#8A877D}
+#pair .ok{background:#D77757}#pair .no{background:#87867F}
 </style></head><body><div id="pair"></div><div id="d">
-<svg viewBox="0 0 480 480"><path id="a1b" fill="none" stroke="#2A2925" stroke-width="16" stroke-linecap="round"/><path id="a1" fill="none" stroke="#D97757" stroke-width="16" stroke-linecap="round"/>
-<path id="a2b" fill="none" stroke="#2A2925" stroke-width="8" stroke-linecap="round"/><path id="a2" fill="none" stroke="#C2B8A3" stroke-width="8" stroke-linecap="round"/></svg>
+<svg viewBox="0 0 480 480"><path id="a1b" fill="none" stroke="#30302E" stroke-width="22" stroke-linecap="round"/><path id="a1" fill="none" stroke="#D77757" stroke-width="22" stroke-linecap="round"/>
+<path id="a2b" fill="none" stroke="#30302E" stroke-width="14" stroke-linecap="round"/><path id="a2" fill="none" stroke="#D4A27F" stroke-width="14" stroke-linecap="round"/></svg>
 <div class="c" id="pct">--</div><div class="c" id="sub"></div><div class="c" id="wk"></div>
 <div id="list"></div><div class="c" id="st"></div>
 <div id="dec"><div class="c" id="dt"></div><div class="c" id="ds"></div><div class="c" id="dtool"></div><div id="dbox"></div>
 <button id="deny">Deny</button><button id="allow">Allow</button><div class="c" id="dh"></div></div></div>
 <script>
 const $=id=>document.getElementById(id);
-function arc(r,pct){const a0=135,sweep=270*Math.max(0,Math.min(100,pct))/100;if(sweep<=0)return"";const p=a=>[240+r*Math.cos(a*Math.PI/180),240+r*Math.sin(a*Math.PI/180)];
+function arc(r,pct){const a0=150,sweep=240*Math.max(0,Math.min(100,pct))/100;if(sweep<=0)return"";const p=a=>[240+r*Math.cos(a*Math.PI/180),240+r*Math.sin(a*Math.PI/180)];
 const [x0,y0]=p(a0),[x1,y1]=p(a0+sweep);return`M${x0} ${y0} A${r} ${r} 0 ${sweep>180?1:0} 1 ${x1} ${y1}`}
-$('a1b').setAttribute('d',arc(226,100));$('a2b').setAttribute('d',arc(206,100));
+$('a1b').setAttribute('d',arc(227,100));$('a2b').setAttribute('d',arc(203,100));
+const lvl=(p,base)=>p>=90?'#FF6B80':p>=75?'#FFC107':base;
 function dur(s){if(s==null)return"?";const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return d?`${d}d ${h}h`:h?`${h}h ${String(m).padStart(2,'0')}m`:`${m}m`}
-const col={working:'#7FB77E',decision:'#D97757',waiting:'#E8B04B',idle:'#8A877D'};
+const col={working:'#4EBA65',decision:'#B1B9F9',waiting:'#FFC107',idle:'#87867F'};
 const word={decision:'needs you',waiting:'waiting',idle:'idle'};
 let cur=null,sent={};
 async function tick(){let s;try{s=await (await fetch('/state')).json()}catch(e){$('st').textContent='bridge offline';return}
 const u=s.usage,f=u.five_hour,w=u.seven_day;
 if(u.ok&&f){$('pct').textContent=Math.round(f.pct)+'%';$('sub').textContent='5-hour limit · resets '+dur(f.resets_in);
-$('a1').setAttribute('d',arc(226,f.pct));$('a1').setAttribute('stroke',f.pct>=90?'#E5544B':f.pct>=75?'#E8B04B':'#D97757')}else{$('pct').textContent='--';$('sub').textContent=u.error||'usage unavailable'}
-if(u.ok&&w){$('wk').textContent='Week '+Math.round(w.pct)+'% · resets '+dur(w.resets_in);$('a2').setAttribute('d',arc(206,w.pct))}
-$('list').innerHTML=s.sessions.length?s.sessions.map(x=>`<div class="row"><div class="dot" style="background:${col[x.state]||'#8A877D'}"></div><div class="nm">${esc(x.name)}</div><div class="dt">${esc(x.tool?x.tool+': '+x.detail:x.detail)}</div><div class="bd">${x.subagents?'+'+x.subagents+(x.subagents>1?' agents':' agent'):(word[x.state]||'')}</div></div>`).join(''):'<div style="text-align:center;color:#8A877D;margin-top:80px">No active Claude sessions</div>';
+$('a1').setAttribute('d',arc(227,f.pct));$('a1').setAttribute('stroke',lvl(f.pct,'#D77757'));$('sub').style.color=lvl(f.pct,'#D77757')}else{$('pct').textContent='--';$('sub').textContent=u.error||'usage unavailable';$('sub').style.color='#87867F'}
+if(u.ok&&w){$('wk').textContent='Week '+Math.round(w.pct)+'% · resets '+dur(w.resets_in);$('a2').setAttribute('d',arc(203,w.pct));$('a2').setAttribute('stroke',lvl(w.pct,'#D4A27F'));$('wk').style.color=lvl(w.pct,'#D4A27F')}
+$('list').innerHTML=s.sessions.length?s.sessions.map(x=>`<div class="row"><div class="dot" style="background:${col[x.state]||'#87867F'}"></div><div class="nm">${esc(x.name)}</div><div class="dt">${esc(x.tool?x.tool+': '+x.detail:x.detail)}</div><div class="bd">${x.subagents?'+'+x.subagents+(x.subagents>1?' agents':' agent'):(word[x.state]||'')}</div></div>`).join(''):'<div style="text-align:center;color:#87867F;margin-top:80px">No active Claude sessions</div>';
 const working=s.sessions.filter(x=>x.state=='working').length;
 $('st').textContent=new Date().toTimeString().slice(0,5)+' · '+working+' working';
 const p=s.pending.find(p=>!sent[p.id]);

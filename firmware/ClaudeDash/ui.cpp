@@ -36,18 +36,20 @@
   #define F_S LV_FONT_DEFAULT
 #endif
 
-// ---------- palette ----------
-#define C_BG     lv_color_hex(0x141413)
-#define C_CARD   lv_color_hex(0x1E1D1A)
-#define C_TRACK  lv_color_hex(0x2A2925)
-#define C_TEXT   lv_color_hex(0xF0EEE6)
-#define C_MUTED  lv_color_hex(0x8A877D)
-#define C_ACCENT lv_color_hex(0xD97757)
-#define C_WEEK   lv_color_hex(0xC2B8A3)
-#define C_GREEN  lv_color_hex(0x7FB77E)
-#define C_AMBER  lv_color_hex(0xE8B04B)
-#define C_RED    lv_color_hex(0xE5544B)
-#define C_BTN    lv_color_hex(0x3A3935)
+// ---------- palette: Claude colors ----------
+// Neutrals and accents from Anthropic's brand palette; status colors from Claude Code's theme.
+#define C_BG     lv_color_hex(0x141413)   // slate
+#define C_CARD   lv_color_hex(0x1F1E1D)
+#define C_TRACK  lv_color_hex(0x30302E)
+#define C_BTN    lv_color_hex(0x3D3D3A)
+#define C_TEXT   lv_color_hex(0xFAF9F5)   // ivory
+#define C_MUTED  lv_color_hex(0x87867F)   // cloud
+#define C_ACCENT lv_color_hex(0xD77757)   // Claude orange: 5-hour ring, Allow
+#define C_WEEK   lv_color_hex(0xD4A27F)   // kraft: weekly ring
+#define C_PERM   lv_color_hex(0xB1B9F9)   // Claude Code permission prompt color
+#define C_GREEN  lv_color_hex(0x4EBA65)   // Claude Code success
+#define C_AMBER  lv_color_hex(0xFFC107)   // Claude Code warning
+#define C_RED    lv_color_hex(0xFF6B80)   // Claude Code error
 
 struct Row { lv_obj_t *box, *dot, *name, *detail, *badge; };
 
@@ -76,7 +78,7 @@ static lv_obj_t *ring(lv_obj_t *parent, int size, int width, lv_color_t c) {
   lv_obj_t *a = lv_arc_create(parent);
   lv_obj_set_size(a, size, size);
   lv_obj_center(a);
-  lv_arc_set_bg_angles(a, 135, 45);
+  lv_arc_set_bg_angles(a, 150, 30);   // 240° sweep, open at the bottom
   lv_arc_set_range(a, 0, 100);
   lv_arc_set_value(a, 0);
   lv_obj_remove_style(a, NULL, LV_PART_KNOB);
@@ -90,6 +92,11 @@ static lv_obj_t *ring(lv_obj_t *parent, int size, int width, lv_color_t c) {
   return a;
 }
 
+// Ring and its usage line share one color: the ring's own color, amber from 75 %, red from 90 %.
+static lv_color_t usageColor(float pct, lv_color_t base) {
+  return pct >= 90 ? C_RED : pct >= 75 ? C_AMBER : base;
+}
+
 static void fmtDur(long s, char *out, size_t n) {
   if (s < 0) { strlcpy(out, "?", n); return; }
   long d = s / 86400, h = (s % 86400) / 3600, m = (s % 3600) / 60;
@@ -100,7 +107,7 @@ static void fmtDur(long s, char *out, size_t n) {
 
 static lv_color_t stateColor(const char *st) {
   if (!strcmp(st, "working")) return C_GREEN;
-  if (!strcmp(st, "decision")) return C_ACCENT;
+  if (!strcmp(st, "decision")) return C_PERM;
   if (!strcmp(st, "waiting")) return C_AMBER;
   return C_MUTED;
 }
@@ -254,13 +261,13 @@ static void buildQuestionOverlay() {
   lv_obj_set_style_radius(qdlg, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_color(qdlg, C_BG, 0);
   lv_obj_set_style_bg_opa(qdlg, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_color(qdlg, C_WEEK, 0);
+  lv_obj_set_style_border_color(qdlg, C_PERM, 0);
   lv_obj_set_style_border_width(qdlg, 5, 0);
   lv_obj_set_style_pad_all(qdlg, 0, 0);
   lv_obj_clear_flag(qdlg, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(qdlg, LV_OBJ_FLAG_HIDDEN);
 
-  lblQTitle = label(qdlg, F_S, C_ACCENT);
+  lblQTitle = label(qdlg, F_S, C_PERM);
   lv_obj_align(lblQTitle, LV_ALIGN_TOP_MID, 0, 44);
   lblQSession = label(qdlg, F_S, C_MUTED);
   lv_obj_align(lblQSession, LV_ALIGN_TOP_MID, 0, 66);
@@ -390,21 +397,21 @@ void ui_init() {
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 
-  arc5 = ring(scr, 468, 16, C_ACCENT);
-  arcWeek = ring(scr, 428, 8, C_WEEK);
+  arc5 = ring(scr, 476, 22, C_ACCENT);    // 5-hour limit: outer, r 238..216
+  arcWeek = ring(scr, 420, 14, C_WEEK);   // weekly limit: inner, r 210..196
 
   lblPct = label(scr, F_XL, C_TEXT);
-  lv_obj_align(lblPct, LV_ALIGN_TOP_MID, 0, 50);
+  lv_obj_align(lblPct, LV_ALIGN_TOP_MID, 0, 58);
   lv_label_set_text(lblPct, "--");
   lblSub = label(scr, F_S, C_MUTED);
-  lv_obj_align(lblSub, LV_ALIGN_TOP_MID, 0, 104);
+  lv_obj_align(lblSub, LV_ALIGN_TOP_MID, 0, 110);
   lv_label_set_text(lblSub, "Connecting...");
   lblWeek = label(scr, F_S, C_WEEK);
-  lv_obj_align(lblWeek, LV_ALIGN_TOP_MID, 0, 126);
+  lv_obj_align(lblWeek, LV_ALIGN_TOP_MID, 0, 132);
 
   list = lv_obj_create(scr);
-  lv_obj_set_size(list, 340, 210);
-  lv_obj_align(list, LV_ALIGN_TOP_MID, 0, 160);
+  lv_obj_set_size(list, 330, 200);
+  lv_obj_align(list, LV_ALIGN_TOP_MID, 0, 164);
   lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(list, 0, 0);
   lv_obj_set_style_pad_all(list, 0, 0);
@@ -416,7 +423,7 @@ void ui_init() {
   for (int i = 0; i < MAX_SESSIONS; i++) {
     Row &r = rows[i];
     r.box = lv_obj_create(list);
-    lv_obj_set_size(r.box, 340, 52);
+    lv_obj_set_size(r.box, 330, 52);
     lv_obj_set_style_bg_color(r.box, C_CARD, 0);
     lv_obj_set_style_border_width(r.box, 0, 0);
     lv_obj_set_style_radius(r.box, 12, 0);
@@ -437,7 +444,7 @@ void ui_init() {
     lv_obj_align(r.name, LV_ALIGN_TOP_LEFT, 28, 6);
 
     r.detail = label(r.box, F_S, C_MUTED);
-    lv_obj_set_width(r.detail, 300);
+    lv_obj_set_width(r.detail, 290);
     lv_label_set_long_mode(r.detail, LV_LABEL_LONG_DOT);
     lv_obj_align(r.detail, LV_ALIGN_BOTTOM_LEFT, 28, -6);
 
@@ -495,13 +502,13 @@ void ui_init() {
   lv_obj_set_style_radius(dec, LV_RADIUS_CIRCLE, 0);
   lv_obj_set_style_bg_color(dec, C_BG, 0);
   lv_obj_set_style_bg_opa(dec, LV_OPA_COVER, 0);
-  lv_obj_set_style_border_color(dec, C_ACCENT, 0);
+  lv_obj_set_style_border_color(dec, C_PERM, 0);
   lv_obj_set_style_border_width(dec, 5, 0);
   lv_obj_set_style_pad_all(dec, 0, 0);
   lv_obj_clear_flag(dec, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_flag(dec, LV_OBJ_FLAG_HIDDEN);
 
-  lblDecTitle = label(dec, F_S, C_ACCENT);
+  lblDecTitle = label(dec, F_S, C_PERM);
   lv_obj_align(lblDecTitle, LV_ALIGN_TOP_MID, 0, 54);
   lblDecSession = label(dec, F_M, C_TEXT);
   lv_obj_align(lblDecSession, LV_ALIGN_TOP_MID, 0, 80);
@@ -577,10 +584,12 @@ void ui_update(const DashState &s) {
   if (!s.wifiOk || !s.bridgeOk) {
     lv_label_set_text(lblPct, "--");
     lv_label_set_text(lblSub, s.wifiOk ? "Bridge offline" : "Connecting to Wi-Fi...");
+    lv_obj_set_style_text_color(lblSub, C_MUTED, 0);
     lv_label_set_text(lblWeek, "");
   } else if (!s.usageOk || !s.fiveHour.valid) {
     lv_label_set_text(lblPct, "--");
     lv_label_set_text(lblSub, s.usageErr[0] ? s.usageErr : "Usage unavailable");
+    lv_obj_set_style_text_color(lblSub, C_MUTED, 0);
     lv_label_set_text(lblWeek, "");
     lv_arc_set_value(arc5, 0);
     lv_arc_set_value(arcWeek, 0);
@@ -591,12 +600,17 @@ void ui_update(const DashState &s) {
     snprintf(buf, sizeof(buf), "5-hour limit - resets %s", a);
     lv_label_set_text(lblSub, buf);
     lv_arc_set_value(arc5, (int)constrain(p + 0.5f, 0, 100));
-    lv_obj_set_style_arc_color(arc5, p >= 90 ? C_RED : p >= 75 ? C_AMBER : C_ACCENT, LV_PART_INDICATOR);
+    lv_color_t c5 = usageColor(p, C_ACCENT);
+    lv_obj_set_style_arc_color(arc5, c5, LV_PART_INDICATOR);
+    lv_obj_set_style_text_color(lblSub, c5, 0);
     if (s.week.valid) {
       fmtDur(s.week.resetsIn, b, sizeof(b));
       snprintf(buf, sizeof(buf), "Week %d%% - resets %s", (int)(s.week.pct + 0.5f), b);
       lv_label_set_text(lblWeek, buf);
       lv_arc_set_value(arcWeek, (int)constrain(s.week.pct + 0.5f, 0, 100));
+      lv_color_t cw = usageColor(s.week.pct, C_WEEK);
+      lv_obj_set_style_arc_color(arcWeek, cw, LV_PART_INDICATOR);
+      lv_obj_set_style_text_color(lblWeek, cw, 0);
     } else {
       lv_label_set_text(lblWeek, "");
     }
@@ -619,7 +633,7 @@ void ui_update(const DashState &s) {
     else if (!strcmp(x.state, "waiting")) lv_label_set_text(r.badge, "waiting");
     else if (!strcmp(x.state, "idle")) lv_label_set_text(r.badge, "idle");
     else lv_label_set_text(r.badge, "");
-    lv_obj_set_style_text_color(r.badge, strcmp(x.state, "decision") ? C_MUTED : C_ACCENT, 0);
+    lv_obj_set_style_text_color(r.badge, strcmp(x.state, "decision") ? C_MUTED : C_PERM, 0);
   }
   if (s.bridgeOk && s.nSessions == 0) lv_obj_clear_flag(lblEmpty, LV_OBJ_FLAG_HIDDEN);
   else lv_obj_add_flag(lblEmpty, LV_OBJ_FLAG_HIDDEN);
