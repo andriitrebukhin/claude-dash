@@ -477,6 +477,9 @@ def wifi_password(ssid):
             continue
         if r.returncode == 0 and r.stdout.strip():
             return r.stdout.rstrip("\n")
+        if r.returncode != 44:   # 44 = not found under this name; anything else (e.g. cancelled) -> stop asking
+            print(f"USB: keychain said no (exit {r.returncode}): {r.stderr.strip()[:120]}", flush=True)
+            return None
     return None
 
 

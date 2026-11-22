@@ -17,6 +17,10 @@
 #include "config.h"
 #include "dash_state.h"
 
+#ifndef DASH_VERSION
+#define DASH_VERSION "dev"
+#endif
+
 struct Decision { char id[24]; char behavior[8]; char answers[96]; };
 
 static DashState g_state;
@@ -94,6 +98,7 @@ static void handleSerialLine(const String &line) {
   if (line == "DASH?") {
     JsonDocument d;
     d["device"] = g_deviceName;
+    d["fw"] = DASH_VERSION;
     d["mode"] = g_mode;
     d["paired"] = g_token.length() > 0;
     d["bid"] = g_bridgeId;
@@ -488,7 +493,8 @@ static RunExit runLoop() {
 }
 
 static void netTask(void *) {
-  setMode(MODE_BOOT, "CLAUDE DASH", "", "Starting...");
+  Serial.printf("[net] Claude Dash firmware %s\n", DASH_VERSION);
+  setMode(MODE_BOOT, "CLAUDE DASH", "", "Starting " DASH_VERSION "...");
   connectWifi();
   for (;;) {
     if (WiFi.status() != WL_CONNECTED) connectWifi();

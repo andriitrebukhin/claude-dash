@@ -54,7 +54,20 @@ The first time the bridge runs, expect these macOS prompts:
 
 ### 2. Display: flash the firmware
 
-See [Building the firmware](#building-the-firmware) below. You only do this once; there's nothing to configure.
+Download `claude-dash-<version>-full.bin` from the [latest release](https://github.com/andriitrebukhin/claude-dash/releases/latest). Then flash it, either from the browser or with esptool:
+
+- **From the browser (Chrome or Edge, nothing to install):** open [esptool-js](https://espressif.github.io/esptool-js/), click **Connect**, and pick the board's USB port. Set the address to `0x0`, choose the file, and click **Program**.
+- **From a terminal:**
+  ```bash
+  pip install esptool
+  esptool --chip esp32s3 write-flash 0x0 claude-dash-<version>-full.bin
+  ```
+
+There's nothing to configure; the same image works for everyone.
+
+**To update a display that's already set up,** flash `claude-dash-<version>-app.bin` at `0x10000` instead. That keeps its Wi-Fi and pairing. The full image starts fresh.
+
+You can also build the firmware yourself; see [Building the firmware](#building-the-firmware).
 
 ### 3. Display: first boot
 
@@ -70,6 +83,10 @@ To start over, **hold BOOT for 5 seconds** while the display is running. It forg
 ## Building the firmware
 
 There's nothing to configure before flashing. `config.h` has no secrets, so one build works for any Wi-Fi and any Mac.
+
+**One command:** `scripts/build-firmware.sh` fetches Waveshare's drivers and LVGL, applies the settings below, compiles, and writes the flashable images to `dist/`. It needs `arduino-cli`, `curl` and `unzip`. The release workflow (`.github/workflows/firmware.yml`) runs the same script when a `v*` tag is pushed.
+
+**Or by hand:**
 
 The build was tested with **arduino-esp32 core 3.3.13**, LVGL 8.3.10 (from Waveshare's demo) and ArduinoJson 7.4. Waveshare's display driver does **not** build on core 4.x.
 
@@ -94,6 +111,8 @@ arduino-cli upload  --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,Partitio
 ```
 .claude-plugin/          plugin + marketplace manifests (plugin name: desk-display)
 hooks/hooks.json         Claude Code hooks -> bridge/claude_dash_hook.py
+scripts/build-firmware.sh  reproducible firmware build -> dist/*.bin (used by CI releases)
+.github/workflows/       firmware release workflow (on v* tags)
 LICENSE                  MIT
 docs/                    README screenshots
 bridge/
