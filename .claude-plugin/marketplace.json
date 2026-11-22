@@ -1,0 +1,14 @@
+{
+  "name": "desk-display",
+  "owner": {
+    "name": "Claude Dash"
+  },
+  "plugins": [
+    {
+      "name": "desk-display",
+      "source": "./",
+      "description": "Desk display for Claude Code: usage limits, live sessions, and Allow/Deny from a touchscreen."
+    }
+  ],
+  "description": "Claude Code hooks + bridge for an ESP32 desk display"
+}

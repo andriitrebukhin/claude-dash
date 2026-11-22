@@ -1,7 +1,6 @@
 // LVGL 8.3 UI for the 480x480 round panel.
 // Enable in lv_conf.h for best looks: LV_FONT_MONTSERRAT_14, _20, _28, _40
 #include <lvgl.h>
-#include <time.h>
 #include "ui.h"
 #include "board.h"
 
@@ -54,6 +53,9 @@ struct Row { lv_obj_t *box, *dot, *name, *detail, *badge; };
 
 static lv_obj_t *arc5, *arcWeek, *lblPct, *lblSub, *lblWeek, *list, *lblEmpty, *lblStatus;
 static Row rows[MAX_SESSIONS];
+static lv_obj_t *setupScr, *lblSetupTitle, *lblSetupBig, *lblSetupSub, *lblSetupHint, *qr;
+static char lastQr[96] = "";
+static char clockText[8] = "--:--";
 static lv_obj_t *dec, *lblDecTitle, *lblDecSession, *lblDecTool, *lblDecDetail, *btnAllow, *btnDeny, *lblDecHint;
 
 static char curPending[24] = "";
@@ -217,6 +219,39 @@ void ui_init() {
   lv_label_set_recolor(lblStatus, true);
   lv_obj_align(lblStatus, LV_ALIGN_BOTTOM_MID, 0, -46);
 
+  // ----- setup overlay: Wi-Fi setup, discovery, pairing -----
+  setupScr = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(setupScr, 480, 480);
+  lv_obj_center(setupScr);
+  lv_obj_set_style_radius(setupScr, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(setupScr, C_BG, 0);
+  lv_obj_set_style_bg_opa(setupScr, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(setupScr, 0, 0);
+  lv_obj_set_style_pad_all(setupScr, 0, 0);
+  lv_obj_clear_flag(setupScr, LV_OBJ_FLAG_SCROLLABLE);
+
+  lblSetupTitle = label(setupScr, F_S, C_ACCENT);
+  lv_obj_align(lblSetupTitle, LV_ALIGN_TOP_MID, 0, 70);
+  lv_label_set_text(lblSetupTitle, "CLAUDE DASH");
+  lblSetupBig = label(setupScr, F_XL, C_TEXT);
+  lv_obj_set_style_text_letter_space(lblSetupBig, 10, 0);
+  lv_obj_align(lblSetupBig, LV_ALIGN_CENTER, 0, -20);
+#if LV_USE_QRCODE
+  qr = lv_qrcode_create(setupScr, 170, C_BG, C_TEXT);
+  lv_obj_set_style_border_color(qr, C_TEXT, 0);
+  lv_obj_set_style_border_width(qr, 8, 0);
+  lv_obj_align(qr, LV_ALIGN_CENTER, 0, -10);
+  lv_obj_add_flag(qr, LV_OBJ_FLAG_HIDDEN);
+#endif
+  lblSetupSub = label(setupScr, F_S, C_TEXT);
+  lv_obj_set_width(lblSetupSub, 300);
+  lv_obj_set_style_text_align(lblSetupSub, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_long_mode(lblSetupSub, LV_LABEL_LONG_WRAP);
+  lv_obj_align(lblSetupSub, LV_ALIGN_CENTER, 0, 110);
+  lv_label_set_text(lblSetupSub, "Starting...");
+  lblSetupHint = label(setupScr, F_S, C_MUTED);
+  lv_obj_align(lblSetupHint, LV_ALIGN_BOTTOM_MID, 0, -50);
+
   // ----- decision overlay (top layer so it covers everything) -----
   dec = lv_obj_create(lv_layer_top());
   lv_obj_set_size(dec, 480, 480);
@@ -261,6 +296,31 @@ void ui_update(const DashState &s) {
   char a[24], b[24], buf[96];
   wifiOk = s.wifiOk;
   linkOk = s.bridgeOk;
+  if (s.clock[0]) strlcpy(clockText, s.clock, sizeof(clockText));
+
+  // setup / pairing screens cover the dashboard until we're running
+  if (s.mode != MODE_RUN) {
+    lv_obj_clear_flag(setupScr, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(dec, LV_OBJ_FLAG_HIDDEN);
+    curPending[0] = 0;
+    lv_label_set_text(lblSetupTitle, s.setup.title);
+    lv_label_set_text(lblSetupBig, s.setup.big);
+    lv_label_set_text(lblSetupSub, s.setup.sub);
+    lv_label_set_text(lblSetupHint, s.mode == MODE_PAIR || s.mode == MODE_PORTAL ? "" : "Hold BOOT 5 s to reset");
+#if LV_USE_QRCODE
+    if (s.setup.qr[0]) {
+      if (strcmp(lastQr, s.setup.qr)) {
+        strlcpy(lastQr, s.setup.qr, sizeof(lastQr));
+        lv_qrcode_update(qr, lastQr, strlen(lastQr));
+      }
+      lv_obj_clear_flag(qr, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(qr, LV_OBJ_FLAG_HIDDEN);
+    }
+#endif
+    return;
+  }
+  lv_obj_add_flag(setupScr, LV_OBJ_FLAG_HIDDEN);
 
   // usage rings
   if (!s.wifiOk || !s.bridgeOk) {
@@ -342,9 +402,6 @@ void ui_tick() {
   static uint32_t last = 0;
   if (millis() - last < 1000) return;
   last = millis();
-  char clock[8] = "--:--";
-  time_t now = time(nullptr);
-  if (now > 1700000000) { struct tm t; localtime_r(&now, &t); strftime(clock, sizeof(clock), "%H:%M", &t); }
   const char *dotColor = linkOk ? "7FB77E" : wifiOk ? "E8B04B" : "E5544B";
-  lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "#  %s  -  %d working", dotColor, clock, workingCount);
+  lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "#  %s  -  %d working", dotColor, clockText, workingCount);
 }

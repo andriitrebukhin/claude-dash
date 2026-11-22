@@ -4,6 +4,15 @@
 #define MAX_SESSIONS 8
 #define MAX_PENDING  4
 
+enum DashMode : uint8_t {
+  MODE_BOOT,       // starting up
+  MODE_PORTAL,     // no Wi-Fi yet: phone setup hotspot running
+  MODE_WIFI,       // joining Wi-Fi
+  MODE_DISCOVER,   // looking for the Mac bridge (Bonjour)
+  MODE_PAIR,       // showing a pairing code, waiting for approval on the Mac
+  MODE_RUN,        // normal dashboard
+};
+
 struct SessionInfo {
   char name[32];
   char state[12];    // working | decision | waiting | idle
@@ -26,9 +35,19 @@ struct UsageWindow {
   long  resetsIn;    // seconds, -1 unknown
 };
 
+struct SetupInfo {
+  char title[40];
+  char big[24];      // e.g. the pairing code
+  char sub[120];
+  char qr[96];       // QR payload, empty = none
+};
+
 struct DashState {
+  uint8_t mode;
+  SetupInfo setup;
   bool wifiOk;
   bool bridgeOk;
+  char clock[8];     // HH:MM from the Mac
   bool usageOk;
   char usageErr[48];
   UsageWindow fiveHour;

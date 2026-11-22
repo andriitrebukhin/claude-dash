@@ -1,10 +1,18 @@
-// Wi-Fi + bridge polling on core 0. LVGL is never touched here; the UI reads
+// Networking on core 0: Wi-Fi setup portal, Bonjour discovery of the Mac
+// bridge, pairing, and state polling. LVGL is never touched here; the UI reads
 // a copy of the state through net_snapshot().
+//
+//   no Wi-Fi saved ──▶ PORTAL (phone hotspot + captive page) ──▶ restart
+//   WIFI ──▶ DISCOVER (_claude-dash._tcp) ──▶ PAIR (code on screen) ──▶ RUN
+//   RUN: 401 ──▶ PAIR,  bridge unreachable ──▶ DISCOVER
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <ESPmDNS.h>
+#include <WebServer.h>
+#include <DNSServer.h>
+#include <Preferences.h>
 #include <ArduinoJson.h>   // v7
-#include <time.h>
+#include <esp_mac.h>
 #include "config.h"
 #include "dash_state.h"
 
@@ -14,23 +22,260 @@ static DashState g_state;
 static DashState g_tmp;               // parse buffer, only used by the net task
 static SemaphoreHandle_t g_mtx;
 static QueueHandle_t g_decQ;
-static IPAddress g_bridgeIp;
-static bool g_ipResolved = false;
+
+static Preferences prefs;
+static String g_ssid, g_pass, g_token, g_bridgeId;
+static String g_base;                 // "http://ip:port" of the bridge
+static String g_deviceName;
 
 static void cp(char *dst, size_t n, const char *src) { strlcpy(dst, src ? src : "", n); }
 
-static String bridgeBase() {
-  String host = BRIDGE_HOST;
-  if (host.endsWith(".local")) {
-    if (!g_ipResolved) {
-      IPAddress ip = MDNS.queryHost(host.substring(0, host.length() - 6), 2000);
-      if (ip != IPAddress(0, 0, 0, 0)) { g_bridgeIp = ip; g_ipResolved = true; }
-    }
-    if (g_ipResolved) host = g_bridgeIp.toString();
-  }
-  return "http://" + host + ":" + String(BRIDGE_PORT);
+// ---------------------------------------------------------------- shared state
+static void setMode(uint8_t mode, const char *title, const char *big, const char *sub, const char *qr = "") {
+  xSemaphoreTake(g_mtx, portMAX_DELAY);
+  g_state.mode = mode;
+  cp(g_state.setup.title, sizeof(g_state.setup.title), title);
+  cp(g_state.setup.big, sizeof(g_state.setup.big), big);
+  cp(g_state.setup.sub, sizeof(g_state.setup.sub), sub);
+  cp(g_state.setup.qr, sizeof(g_state.setup.qr), qr);
+  g_state.wifiOk = WiFi.status() == WL_CONNECTED;
+  if (mode != MODE_RUN) g_state.bridgeOk = false;
+  g_state.seq++;
+  xSemaphoreGive(g_mtx);
 }
 
+static void saveStr(const char *key, const String &v) {
+  prefs.begin("dash", false);
+  prefs.putString(key, v);
+  prefs.end();
+}
+
+static void loadPrefs() {
+  prefs.begin("dash", true);
+  g_ssid = prefs.getString("ssid", "");
+  g_pass = prefs.getString("pass", "");
+  g_token = prefs.getString("token", "");
+  g_bridgeId = prefs.getString("bid", "");
+  prefs.end();
+}
+
+// Hold BOOT for 5 s at any time to forget Wi-Fi and pairing.
+static void checkResetButton() {
+  static uint32_t downSince = 0;
+  if (digitalRead(RESET_BUTTON_PIN) == LOW) {
+    if (!downSince) downSince = millis();
+    if (millis() - downSince > 5000) {
+      setMode(MODE_BOOT, "RESETTING", "", "Forgetting Wi-Fi and pairing...");
+      prefs.begin("dash", false);
+      prefs.clear();
+      prefs.end();
+      delay(800);
+      ESP.restart();
+    }
+  } else {
+    downSince = 0;
+  }
+}
+
+static void waitMs(uint32_t ms) {
+  uint32_t t0 = millis();
+  while (millis() - t0 < ms) { checkResetButton(); vTaskDelay(pdMS_TO_TICKS(50)); }
+}
+
+// ---------------------------------------------------------------- Wi-Fi setup portal
+static String htmlEscape(const String &s) {
+  String o;
+  for (char c : s) {
+    if (c == '<') o += "&lt;"; else if (c == '>') o += "&gt;"; else if (c == '&') o += "&amp;";
+    else if (c == '"') o += "&quot;"; else if (c == '\'') o += "&#39;"; else o += c;
+  }
+  return o;
+}
+
+static void runPortal(const char *why) {
+  WiFi.mode(WIFI_AP_STA);
+  int n = WiFi.scanNetworks();
+  String opts;
+  int shown = 0;
+  for (int i = 0; i < n && shown < 15; i++) {
+    String s = WiFi.SSID(i);
+    if (!s.length() || opts.indexOf(">" + htmlEscape(s) + "<") >= 0) continue;
+    opts += "<button type=button onclick=\"f.s.value=this.textContent;f.p.focus()\">" + htmlEscape(s) + "</button>";
+    shown++;
+  }
+  WiFi.scanDelete();
+  WiFi.softAP(SETUP_AP_NAME);
+  IPAddress apIp = WiFi.softAPIP();
+
+  DNSServer dns;
+  dns.start(53, "*", apIp);
+  WebServer server(80);
+  bool saved = false;
+
+  const String page = String(
+    "<!doctype html><meta name=viewport content='width=device-width,initial-scale=1'><title>Claude Dash setup</title>"
+    "<style>body{font-family:-apple-system,sans-serif;background:#141413;color:#F0EEE6;max-width:420px;margin:auto;padding:20px}"
+    "h1{font-size:22px}button,input{font-size:17px;border-radius:10px;border:0;padding:12px;width:100%;box-sizing:border-box;margin:4px 0}"
+    "button{background:#2A2925;color:#F0EEE6;text-align:left}input{background:#F0EEE6}.go{background:#D97757;text-align:center;margin-top:14px}"
+    "p{color:#8A877D}</style><h1>Connect Claude Dash to Wi-Fi</h1><p>Pick your network (2.4 GHz) and enter its password.</p>") +
+    opts + "<form name=f method=post action=/save><input name=s placeholder='Network name' required>"
+    "<input name=p type=password placeholder='Password'><button class=go>Connect</button></form>";
+
+  server.on("/", HTTP_GET, [&]() { server.send(200, "text/html", page); });
+  server.on("/save", HTTP_POST, [&]() {
+    String s = server.arg("s"), p = server.arg("p");
+    s.trim();
+    if (!s.length()) { server.send(400, "text/plain", "Network name required"); return; }
+    prefs.begin("dash", false);
+    prefs.putString("ssid", s);
+    prefs.putString("pass", p);
+    prefs.end();
+    server.send(200, "text/html",
+      "<meta name=viewport content='width=device-width'><body style='font-family:sans-serif;background:#141413;color:#F0EEE6;padding:20px'>"
+      "<h2>Saved</h2><p>Claude Dash is joining " + htmlEscape(s) + ". You can reconnect your phone to your normal Wi-Fi now.</p>");
+    saved = true;
+  });
+  server.onNotFound([&]() {   // captive-portal detection on iOS/Android/macOS
+    server.sendHeader("Location", String("http://") + apIp.toString() + "/", true);
+    server.send(302, "text/plain", "");
+  });
+  server.begin();
+
+  char sub[120];
+  snprintf(sub, sizeof(sub), "%sJoin \"%s\" on your phone and pick your Wi-Fi", why, SETUP_AP_NAME);
+  char qr[96];
+  snprintf(qr, sizeof(qr), "WIFI:T:nopass;S:%s;;", SETUP_AP_NAME);
+  setMode(MODE_PORTAL, "SET UP WI-FI", "", sub, qr);
+
+  uint32_t savedAt = 0, lastRetry = millis();
+  for (;;) {
+    dns.processNextRequest();
+    server.handleClient();
+    checkResetButton();
+    if (saved && !savedAt) savedAt = millis();
+    if (savedAt && millis() - savedAt > 1500) ESP.restart();
+    // saved network came back (e.g. router rebooted)? go back to normal
+    if (g_ssid.length() && !saved) {
+      if (WiFi.status() == WL_CONNECTED) ESP.restart();
+      if (millis() - lastRetry > 60000) { WiFi.begin(g_ssid.c_str(), g_pass.c_str()); lastRetry = millis(); }
+    }
+    vTaskDelay(pdMS_TO_TICKS(5));
+  }
+}
+
+static void connectWifi() {
+  if (!g_ssid.length()) runPortal("");   // never returns
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(g_ssid.c_str(), g_pass.c_str());
+  char sub[120];
+  snprintf(sub, sizeof(sub), "Joining %s", g_ssid.c_str());
+  setMode(MODE_WIFI, "CONNECTING", "", sub);
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - t0 > 40000) {
+      snprintf(sub, sizeof(sub), "Couldn't join %s. ", g_ssid.c_str());
+      runPortal(sub);                      // never returns
+    }
+    waitMs(250);
+  }
+  Serial.printf("[net] Wi-Fi up, IP %s\n", WiFi.localIP().toString().c_str());
+  MDNS.begin(g_deviceName.c_str());
+}
+
+// ---------------------------------------------------------------- discovery
+static bool discover() {
+#ifdef BRIDGE_HOST_OVERRIDE
+  g_base = String("http://") + BRIDGE_HOST_OVERRIDE;
+  return true;
+#endif
+  int n = MDNS.queryService("claude-dash", "tcp");
+  if (n <= 0) return false;
+  int pick = 0;
+  for (int i = 0; i < n; i++)
+    if (g_bridgeId.length() && MDNS.txt(i, "id") == g_bridgeId) { pick = i; break; }
+  g_base = "http://" + MDNS.address(pick).toString() + ":" + String(MDNS.port(pick));
+  Serial.printf("[net] found bridge %s (%d on LAN)\n", g_base.c_str(), n);
+  return true;
+}
+
+static void discoverLoop() {
+  setMode(MODE_DISCOVER, "LOOKING FOR YOUR MAC", "",
+          "Start Claude Code with the desk-display plugin on a Mac on this Wi-Fi");
+  while (!discover()) {
+    if (WiFi.status() != WL_CONNECTED) { connectWifi(); continue; }
+    waitMs(3000);
+  }
+}
+
+// ---------------------------------------------------------------- HTTP helpers
+static int httpGet(const String &path, String &body, bool auth) {
+  HTTPClient http;
+  http.setTimeout(3000);
+  http.begin(g_base + path);
+  if (auth) http.addHeader("X-Token", g_token);
+  int code = http.GET();
+  if (code > 0) body = http.getString();
+  http.end();
+  return code;
+}
+
+static int httpPost(const String &path, const String &json, String &body, bool auth) {
+  HTTPClient http;
+  http.setTimeout(3000);
+  http.begin(g_base + path);
+  http.addHeader("Content-Type", "application/json");
+  if (auth) http.addHeader("X-Token", g_token);
+  int code = http.POST(json);
+  if (code > 0) body = http.getString();
+  http.end();
+  return code;
+}
+
+// ---------------------------------------------------------------- pairing
+// Returns true once paired; false if the bridge went away (caller re-discovers).
+static bool pairLoop() {
+  int failures = 0;
+  for (;;) {
+    char code[8];
+    snprintf(code, sizeof(code), "%04u", (unsigned)(esp_random() % 10000));
+    String body;
+    int rc = httpPost("/pair/request", String("{\"device\":\"") + g_deviceName + "\",\"code\":\"" + code + "\"}", body, false);
+    if (rc != 200) { if (++failures > 4) return false; waitMs(2000); continue; }
+    JsonDocument doc;
+    if (deserializeJson(doc, body)) { waitMs(2000); continue; }
+    String req = doc["req"] | "";
+    setMode(MODE_PAIR, "PAIR WITH YOUR MAC", code, "Approve this code in the page that opened on your Mac");
+
+    uint32_t t0 = millis();
+    while (millis() - t0 < 9 * 60 * 1000UL) {
+      waitMs(1500);
+      int sc = httpGet("/pair/status?req=" + req, body, false);
+      if (sc != 200) { if (++failures > 6) return false; continue; }
+      failures = 0;
+      JsonDocument st;
+      if (deserializeJson(st, body)) continue;
+      String status = st["status"] | "";
+      if (status == "approved") {
+        g_token = st["token"] | "";
+        g_bridgeId = st["bridge_id"] | "";
+        saveStr("token", g_token);
+        saveStr("bid", g_bridgeId);
+        Serial.println("[net] paired");
+        return true;
+      }
+      if (status == "denied") {
+        setMode(MODE_PAIR, "PAIRING REJECTED", "", "Getting a new code...");
+        waitMs(4000);
+        break;
+      }
+      if (status == "unknown") break;   // bridge restarted: ask again
+    }
+  }
+}
+
+// ---------------------------------------------------------------- dashboard
 static void parseWindow(JsonVariantConst w, UsageWindow &o) {
   o.valid = !w.isNull() && !w["pct"].isNull();
   o.pct = w["pct"] | 0.0f;
@@ -41,6 +286,7 @@ static bool parseState(const String &body, DashState &st) {
   JsonDocument doc;
   if (deserializeJson(doc, body)) return false;
   memset(&st, 0, sizeof(st));
+  cp(st.clock, sizeof(st.clock), doc["clock"] | "");
 
   JsonVariantConst u = doc["usage"];
   st.usageOk = u["ok"] | false;
@@ -70,79 +316,61 @@ static bool parseState(const String &body, DashState &st) {
 }
 
 static void postDecision(const Decision &d) {
-  HTTPClient http;
-  http.setTimeout(3000);
-  http.begin(bridgeBase() + "/decision");
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("X-Token", BRIDGE_TOKEN);
-  String body = String("{\"id\":\"") + d.id + "\",\"behavior\":\"" + (d.allow ? "allow" : "deny") + "\"}";
-  int code = http.POST(body);
+  String body;
+  int code = httpPost("/decision", String("{\"id\":\"") + d.id + "\",\"behavior\":\"" + (d.allow ? "allow" : "deny") + "\"}", body, true);
   Serial.printf("[net] decision %s %s -> %d\n", d.id, d.allow ? "allow" : "deny", code);
-  http.end();
 }
 
-static void setLink(bool wifi, bool bridge) {
-  xSemaphoreTake(g_mtx, portMAX_DELAY);
-  if (g_state.wifiOk != wifi || g_state.bridgeOk != bridge) {
-    g_state.wifiOk = wifi;
-    g_state.bridgeOk = bridge;
-    g_state.seq++;
-  }
-  xSemaphoreGive(g_mtx);
-}
+enum RunExit { EXIT_UNAUTHORIZED, EXIT_LOST };
 
-static void netTask(void *) {
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  uint32_t lastTry = millis();
-  bool started = false;
-
+static RunExit runLoop() {
+  int failures = 0;
   for (;;) {
-    if (WiFi.status() != WL_CONNECTED) {
-      setLink(false, false);
-      if (millis() - lastTry > 15000) {
-        Serial.println("[net] reconnecting Wi-Fi");
-        WiFi.disconnect();
-        WiFi.begin(WIFI_SSID, WIFI_PASS);
-        lastTry = millis();
-      }
-      vTaskDelay(pdMS_TO_TICKS(500));
-      continue;
-    }
-    if (!started) {
-      Serial.printf("[net] Wi-Fi up, IP %s\n", WiFi.localIP().toString().c_str());
-      MDNS.begin("claude-dash");
-      configTzTime(TZ_INFO, "pool.ntp.org", "time.google.com");
-      started = true;
-    }
-
+    checkResetButton();
     Decision d;
     while (xQueueReceive(g_decQ, &d, 0) == pdTRUE) postDecision(d);
 
-    HTTPClient http;
-    http.setTimeout(3000);
-    http.begin(bridgeBase() + "/state?ascii=1");
-    http.addHeader("X-Token", BRIDGE_TOKEN);
-    int code = http.GET();
-    bool ok = code == 200 && parseState(http.getString(), g_tmp);
-    http.end();
-    if (code == 401) Serial.println("[net] bridge rejected token - check BRIDGE_TOKEN");
+    String body;
+    int code = httpGet("/state?ascii=1", body, true);
+    if (code == 401) return EXIT_UNAUTHORIZED;
+    bool ok = code == 200 && parseState(body, g_tmp);
 
+    xSemaphoreTake(g_mtx, portMAX_DELAY);
     if (ok) {
-      xSemaphoreTake(g_mtx, portMAX_DELAY);
+      g_tmp.mode = MODE_RUN;
+      g_tmp.setup = g_state.setup;
       g_tmp.wifiOk = true;
       g_tmp.bridgeOk = true;
       g_tmp.seq = g_state.seq + 1;
       memcpy(&g_state, &g_tmp, sizeof(g_state));
-      xSemaphoreGive(g_mtx);
     } else {
-      g_ipResolved = false;   // re-resolve .local next time
-      setLink(true, false);
+      g_state.mode = MODE_RUN;
+      g_state.wifiOk = WiFi.status() == WL_CONNECTED;
+      g_state.bridgeOk = false;
+      g_state.seq++;
     }
+    xSemaphoreGive(g_mtx);
+
+    failures = ok ? 0 : failures + 1;
+    if (failures >= 5) return EXIT_LOST;   // Mac asleep / IP changed: look again
 
     // sleep until next poll, but wake immediately if a decision was tapped
-    xQueuePeek(g_decQ, &d, pdMS_TO_TICKS(ok ? POLL_MS : 3000));
+    xQueuePeek(g_decQ, &d, pdMS_TO_TICKS(ok ? POLL_MS : 2000));
+  }
+}
+
+static void netTask(void *) {
+  setMode(MODE_BOOT, "CLAUDE DASH", "", "Starting...");
+  connectWifi();
+  for (;;) {
+    if (WiFi.status() != WL_CONNECTED) connectWifi();
+    discoverLoop();
+    if (!g_token.length() && !pairLoop()) continue;
+    if (runLoop() == EXIT_UNAUTHORIZED) {
+      Serial.println("[net] token rejected - pairing again");
+      g_token = "";
+      saveStr("token", "");
+    }
   }
 }
 
@@ -150,7 +378,14 @@ void net_begin() {
   g_mtx = xSemaphoreCreateMutex();
   g_decQ = xQueueCreate(4, sizeof(Decision));
   memset(&g_state, 0, sizeof(g_state));
-  xTaskCreatePinnedToCore(netTask, "net", 12288, nullptr, 1, nullptr, 0);
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+  uint8_t mac[6];
+  esp_read_mac(mac, ESP_MAC_WIFI_STA);
+  char name[24];
+  snprintf(name, sizeof(name), "claude-dash-%02x%02x", mac[4], mac[5]);
+  g_deviceName = name;
+  loadPrefs();
+  xTaskCreatePinnedToCore(netTask, "net", 16384, nullptr, 1, nullptr, 0);
 }
 
 bool net_snapshot(DashState &out, uint32_t &lastSeq) {

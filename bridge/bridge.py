@@ -10,15 +10,23 @@ Claude plan usage limits, and serves them to the ESP32 desk display.
 Endpoints
   POST /hook       (localhost only)  hook events from claude_dash_hook.py;
                                      PermissionRequest blocks until a decision
-  GET  /state      (token or localhost)  compact JSON for the display
-  POST /decision   (token or localhost)  {"id": "...", "behavior": "allow"|"deny"}
-  GET  /           (localhost only)  browser preview of the display
+  GET  /state      (device token or localhost)  compact JSON for the display
+  POST /decision   (device token or localhost)  {"id": "...", "behavior": "allow"|"deny"}
+  POST /pair/request  (LAN)          display asks to pair: {"device": "...", "code": "1234"}
+  GET  /pair/status?req=...  (LAN)   display polls; gets its token once approved
+  POST /pair/approve  (localhost)    {"req": "...", "approve": true|false}
+  GET  /           (localhost only)  browser preview of the display + pairing approval
+
+The bridge advertises itself over Bonjour as _claude-dash._tcp, so the display
+finds it without knowing the Mac's IP.
 """
 import argparse
+import atexit
 import json
 import os
 import random
 import secrets
+import signal
 import socket
 import subprocess
 import sys
@@ -54,6 +62,8 @@ def load_conf():
         "port": 8787,
         "decision_timeout": 30,   # seconds the display gets before the terminal prompt takes over
         "usage_poll_secs": 120,
+        "bridge_id": secrets.token_hex(4),
+        "devices": {},            # paired displays: name -> token
     }
     changed = False
     for k, v in defaults.items():
@@ -64,6 +74,47 @@ def load_conf():
         CONF_FILE.write_text(json.dumps(conf, indent=2))
         os.chmod(CONF_FILE, 0o600)
     return conf
+
+
+def save_conf(conf):
+    tmp = CONF_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(conf, indent=2))
+    os.chmod(tmp, 0o600)
+    tmp.replace(CONF_FILE)
+
+
+def notify_pairing(port, device, code):
+    """Pop up the approval page on the Mac (and a notification)."""
+    if sys.platform != "darwin" or os.environ.get("CLAUDE_DASH_NO_POPUP"):
+        return
+    try:
+        msg = f"Code {code} - approve it in the page that just opened"
+        subprocess.Popen(["osascript", "-e", f'display notification "{msg}" with title "Claude Dash: pair {device}?"'],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.Popen(["open", f"http://127.0.0.1:{port}/"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
+def advertise(conf):
+    """Announce the bridge on the LAN via Bonjour (built into macOS)."""
+    if sys.platform != "darwin":
+        try:  # optional on Linux: pip install zeroconf
+            from zeroconf import ServiceInfo, Zeroconf
+            zc = Zeroconf()
+            info = ServiceInfo("_claude-dash._tcp.local.", f"Claude Dash {socket.gethostname()}._claude-dash._tcp.local.",
+                               addresses=[socket.inet_aton(lan_ip())], port=conf["port"],
+                               properties={"id": conf["bridge_id"], "v": "1"})
+            zc.register_service(info)
+            atexit.register(zc.close)
+        except Exception as e:  # noqa: BLE001
+            print(f"Bonjour advert unavailable ({e}); set the bridge address on the display manually", flush=True)
+        return
+    name = f"Claude Dash {socket.gethostname().split('.')[0]}"
+    proc = subprocess.Popen(["dns-sd", "-R", name, "_claude-dash._tcp", "local", str(conf["port"]),
+                             f"id={conf['bridge_id']}", "v=1"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    atexit.register(proc.terminate)
 
 
 def ascii_only(s):
@@ -130,6 +181,62 @@ class Dash:
         self.pending = {}
         self.usage = {"ok": False, "error": "fetching..."}
         self.usage_at = 0
+        self.pairings = {}   # req id -> {device, code, created, status, token}
+
+    # ---------- pairing ----------
+    def pair_request(self, device, code):
+        device = clip(ascii_only(str(device or "display")), 32)
+        code = "".join(c for c in str(code or "") if c.isdigit())[:6]
+        if len(code) < 4:
+            return None
+        with self.lock:
+            now = time.time()
+            for k, p in list(self.pairings.items()):
+                if now - p["created"] > 600 or (p["device"] == device and p["status"] == "pending"):
+                    del self.pairings[k]
+            req = secrets.token_urlsafe(16)
+            self.pairings[req] = {"device": device, "code": code, "created": now,
+                                  "status": "pending", "token": None}
+        print(f"Pairing request from {device}: code {code} - approve at http://127.0.0.1:{self.conf['port']}/", flush=True)
+        notify_pairing(self.conf["port"], device, code)
+        return req
+
+    def pair_status(self, req):
+        with self.lock:
+            p = self.pairings.get(req)
+            if not p:
+                return {"status": "unknown"}
+            out = {"status": p["status"]}
+            if p["status"] == "approved":
+                out["token"] = p["token"]
+                out["bridge_id"] = self.conf["bridge_id"]
+                del self.pairings[req]   # hand the token out exactly once
+            return out
+
+    def pair_decide(self, req, approve):
+        with self.lock:
+            p = self.pairings.get(req)
+            if not p or p["status"] != "pending":
+                return False
+            if approve:
+                tok = secrets.token_urlsafe(18)
+                self.conf["devices"][p["device"]] = tok
+                save_conf(self.conf)
+                p.update(status="approved", token=tok)
+            else:
+                p["status"] = "denied"
+            return True
+
+    def pending_pairings(self):
+        with self.lock:
+            return [{"req": k, "device": p["device"], "code": p["code"]}
+                    for k, p in self.pairings.items() if p["status"] == "pending"]
+
+    def token_ok(self, tok):
+        if not tok:
+            return False
+        valid = list(self.conf["devices"].values()) + [self.conf["token"]]
+        return any(secrets.compare_digest(tok, v) for v in valid)
 
     # ---------- hook events ----------
     def _session(self, sid, cwd):
@@ -247,7 +354,7 @@ class Dash:
                 w = usage.get(k)
                 if isinstance(w, dict) and w.get("resets_at"):
                     usage[k] = dict(w, resets_in=max(0, int(w["resets_at"] - now)))
-        return {"ts": int(now), "usage": usage, "sessions": sessions[:8], "pending": pending[:4]}
+        return {"ts": int(now), "clock": time.strftime("%H:%M"), "usage": usage, "sessions": sessions[:8], "pending": pending[:4]}
 
 
 # ---------------- usage fetching ----------------
@@ -343,8 +450,6 @@ def demo_loop(dash):
 
 # ---------------- HTTP ----------------
 def make_handler(dash):
-    token = dash.conf["token"]
-
     class H(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
 
@@ -355,7 +460,7 @@ def make_handler(dash):
             return self.client_address[0] in ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 
         def _authed(self):
-            return self._local() or secrets.compare_digest(self.headers.get("X-Token", ""), token)
+            return self._local() or dash.token_ok(self.headers.get("X-Token", ""))
 
         def _send(self, code, body, ctype="application/json"):
             data = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -382,6 +487,10 @@ def make_handler(dash):
                 if parse_qs(u.query).get("ascii"):
                     snap = asciify(snap)
                 return self._send(200, snap)
+            if u.path == "/pair/status":
+                return self._send(200, dash.pair_status(parse_qs(u.query).get("req", [""])[0]))
+            if u.path == "/pairings" and self._local():
+                return self._send(200, dash.pending_pairings())
             if u.path == "/" and self._local():
                 return self._send(200, PREVIEW_HTML.encode(), "text/html; charset=utf-8")
             self._send(404, {"error": "not found"})
@@ -396,6 +505,15 @@ def make_handler(dash):
                     return self._send(200, {"decision": dash.wait_permission(ev)})
                 dash.handle_event(ev)
                 return self._send(200, {})
+            if u.path == "/pair/request":
+                b = self._body()
+                req = dash.pair_request(b.get("device"), b.get("code"))
+                return self._send(200 if req else 400, {"req": req} if req else {"error": "bad code"})
+            if u.path == "/pair/approve":
+                if not self._local():
+                    return self._send(403, {"error": "local only"})
+                b = self._body()
+                return self._send(200, {"ok": dash.pair_decide(str(b.get("req", "")), bool(b.get("approve")))})
             if u.path == "/decision":
                 if not self._authed():
                     return self._send(401, {"error": "bad token"})
@@ -437,7 +555,11 @@ svg{position:absolute;inset:0}
 button{position:absolute;top:305px;width:150px;height:72px;border:0;border-radius:36px;font-size:20px;color:#F0EEE6;cursor:pointer}
 #deny{left:83px;background:#3A3935}#allow{left:243px;background:#D97757}
 #dh{bottom:40px;font-size:13px;color:#8A877D}
-</style></head><body><div id="d">
+#pair{position:fixed;top:24px;left:50%;transform:translateX(-50%);background:#F0EEE6;color:#141413;border-radius:16px;padding:18px 22px;display:none;text-align:center;box-shadow:0 8px 30px #0008;z-index:9}
+#pair b{display:block;font-size:44px;letter-spacing:8px;margin:6px 0 10px}
+#pair button{position:static;width:auto;height:auto;padding:10px 20px;font-size:16px;border-radius:10px;margin:0 4px}
+#pair .ok{background:#D97757}#pair .no{background:#8A877D}
+</style></head><body><div id="pair"></div><div id="d">
 <svg viewBox="0 0 480 480"><path id="a1b" fill="none" stroke="#2A2925" stroke-width="16" stroke-linecap="round"/><path id="a1" fill="none" stroke="#D97757" stroke-width="16" stroke-linecap="round"/>
 <path id="a2b" fill="none" stroke="#2A2925" stroke-width="8" stroke-linecap="round"/><path id="a2" fill="none" stroke="#C2B8A3" stroke-width="8" stroke-linecap="round"/></svg>
 <div class="c" id="pct">--</div><div class="c" id="sub"></div><div class="c" id="wk"></div>
@@ -467,7 +589,13 @@ $('ds').textContent=p.session;$('dtool').textContent=p.tool;$('dbox').textConten
 function esc(t){return String(t).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 async function decide(b){if(!cur)return;sent[cur]=1;await fetch('/decision',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:cur,behavior:b})});tick()}
 $('allow').onclick=()=>decide('allow');$('deny').onclick=()=>decide('deny');
-tick();setInterval(tick,1000);
+async function pairs(){let l=[];try{l=await (await fetch('/pairings')).json()}catch(e){}
+const el=$('pair');if(!l.length){el.style.display='none';return}const p=l[0];el.style.display='block';
+if(el.dataset.req===p.req)return;el.dataset.req=p.req;
+el.innerHTML=`Pair <i>${esc(p.device)}</i>? Check the code on the display:<b>${esc(p.code)}</b><button class="ok">Approve</button><button class="no">Reject</button>`;
+el.querySelector('.ok').onclick=()=>pd(p.req,true);el.querySelector('.no').onclick=()=>pd(p.req,false)}
+async function pd(req,ok){await fetch('/pair/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({req,approve:ok})});$('pair').dataset.req='';pairs()}
+tick();pairs();setInterval(tick,1000);setInterval(pairs,1500);
 </script></body></html>"""
 
 
@@ -480,11 +608,17 @@ def main():
     if args.port:
         conf["port"] = args.port
     dash = Dash(conf)
+    signal.signal(signal.SIGTERM, lambda *a: sys.exit(0))  # so atexit stops the Bonjour advert
     threading.Thread(target=demo_loop if args.demo else usage_loop, args=(dash,), daemon=True).start()
-    srv = ThreadingHTTPServer(("0.0.0.0", conf["port"]), make_handler(dash))
+    try:
+        srv = ThreadingHTTPServer(("0.0.0.0", conf["port"]), make_handler(dash))
+    except OSError:
+        print(f"Port {conf['port']} busy - bridge already running?", flush=True)
+        return
     srv.daemon_threads = True
-    print(f"Claude Dash bridge on http://{lan_ip()}:{conf['port']}  (preview: http://127.0.0.1:{conf['port']}/)")
-    print(f"Display token: {conf['token']}   (config: {CONF_FILE})")
+    advertise(conf)
+    print(f"Claude Dash bridge on http://{lan_ip()}:{conf['port']} (Bonjour: _claude-dash._tcp)", flush=True)
+    print(f"Open http://127.0.0.1:{conf['port']}/ for the preview and to approve pairing.", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
