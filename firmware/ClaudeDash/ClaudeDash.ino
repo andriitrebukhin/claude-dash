@@ -9,6 +9,7 @@ static DashState snap;
 static uint32_t lastSeq = 0;
 
 void setup() {
+  Serial.setTxBufferSize(2048);   // DASH HELLO / Improv replies can be long; the default USB buffer truncates them
   Serial.begin(115200);
   board_init();
   ui_init();

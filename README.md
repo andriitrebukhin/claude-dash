@@ -11,6 +11,7 @@ A desk display for Claude Code on the Waveshare **ESP32-S3-Touch-LCD-2.1** (480Ã
 - **Usage rings**: the outer ring is the 5-hour limit, the inner ring is the weekly limit. Each shows a reset countdown.
 - **Sessions**: one row per Claude Code session, showing the project folder, what it's doing (tool and command or file), and how many subagents it's running. The dot shows the state: green = working, orange = needs you, amber = waiting, grey = idle.
 - **Decisions**: when Claude Code asks for permission, the display chirps and shows a full-screen **Allow / Deny** card. If you don't answer within the timeout (30 s by default), the normal terminal prompt takes over.
+- **Several Macs**: pair the display with up to 4 Macs. Each Mac gets its own page with its usage and sessions; **swipe left or right** to switch. Dots under the list show the page; a dot turns yellow when that Mac has something waiting for you. Permission requests and questions from any Mac pop up wherever you are.
 - **Questions**: when Claude asks a multiple-choice question, the display shows each question with its options as buttons. Single-choice questions take one tap; multi-select questions toggle options and finish with **Done**. **Skip** hands the question back to the normal prompt. The display gets 50 s (`question_timeout`).
 
 ```
@@ -43,10 +44,10 @@ claude plugin marketplace add andriitrebukhin/claude-dash
 claude plugin install desk-display@desk-display
 ```
 
-That's all you need on the Mac. The plugin's hooks start the bridge in the background on the next Claude Code session; there's no daemon to set up. Sessions that were already open start reporting once you restart them.
+That's all you need on the Mac. On the next Claude Code session the plugin starts the bridge and adds it as a **login item**, so after a reboot the display reconnects without waiting for Claude Code. macOS also restarts it if it ever crashes. To turn this off, set `"start_at_login": false` in `~/.claude-dash/config.json`. Sessions that were already open start reporting once you restart them.
 
-- **Update:** `/plugin marketplace update desk-display`, then restart Claude Code. A running bridge keeps its old code until it restarts; to restart it now, run `kill $(lsof -t -iTCP:8787 -sTCP:LISTEN)`, and the next hook starts it again.
-- **Uninstall:** `/plugin uninstall desk-display@desk-display`, and optionally delete `~/.claude-dash/`.
+- **Update:** `/plugin marketplace update desk-display`, then restart Claude Code. The login item follows the plugin to its new location on the next session.
+- **Uninstall:** set `"start_at_login": false` and start one Claude Code session (this removes the login item), then `/plugin uninstall desk-display@desk-display`, and optionally delete `~/.claude-dash/`.
 
 The first time the bridge runs, expect these macOS prompts:
 - **Keychain**: allow `security` to read `Claude Code-credentials`. This is how the bridge gets your usage limits. The token never leaves your Mac except to go to api.anthropic.com. The usage endpoint is undocumented and could change; if it does, the rings show `--` and everything else keeps working.
@@ -54,9 +55,11 @@ The first time the bridge runs, expect these macOS prompts:
 
 ### 2. Display: flash the firmware
 
-Download `claude-dash-<version>-full.bin` from the [latest release](https://github.com/andriitrebukhin/claude-dash/releases/latest). Then flash it, either from the browser or with esptool:
+**One click: [andriitrebukhin.github.io/claude-dash](https://andriitrebukhin.github.io/claude-dash/)** in Chrome or Edge. Click **Install Claude Dash**, pick the board's port, and when it finishes, enter your Wi-Fi on the same page. Nothing to install.
 
-- **From the browser (Chrome or Edge, nothing to install):** open [esptool-js](https://espressif.github.io/esptool-js/), click **Connect**, and pick the board's USB port. Set the address to `0x0`, choose the file, and click **Program**.
+Or flash a file from the [latest release](https://github.com/andriitrebukhin/claude-dash/releases/latest) yourself:
+
+- **[esptool-js](https://espressif.github.io/esptool-js/) in the browser:** connect, set the address to `0x0`, choose `claude-dash-<version>-full.bin`, and click **Program**.
 - **From a terminal:**
   ```bash
   pip install esptool
@@ -67,11 +70,13 @@ There's nothing to configure; the same image works for everyone.
 
 **Updates are wireless.** When a new release is out, the display shows an **Update to vX** button. Tap it, confirm, and it installs over Wi-Fi in about a minute, keeping its Wi-Fi and pairing. The Mac bridge checks GitHub releases every 6 hours and downloads the new firmware. It checks the file against the release's SHA-256 checksums, and the display checks it again (MD5) before installing. To update over USB instead, flash `claude-dash-<version>-update.bin` at `0xe000`; that also keeps Wi-Fi and pairing. The full image starts fresh.
 
-**The board has two USB-C ports.** Use the one labelled **USB** for USB setup from the Mac (option A below); the **UART** port works for flashing only.
+**The board has two USB-C ports.** Both work with the browser installer; **UART** is the smoother one there, because the **USB** port briefly disconnects when the board restarts. USB setup from the Mac (option A below) needs the **USB** port.
 
 You can also build the firmware yourself; see [Building the firmware](#building-the-firmware).
 
 ### 3. Display: first boot
+
+If you used the browser installer and entered your Wi-Fi there, skip to **Pair** below.
 
 **Option A: plug it into your Mac with USB (easiest).** Use the board's **USB** port, not UART. The bridge notices the display on the cable. It shares your Mac's Wi-Fi (macOS asks once for your password, to read the saved Wi-Fi password) and pairs it. There's no typing and no code. It picks the first of the Mac's saved networks that the display can see, so 5 GHz-only networks are skipped automatically.
 
@@ -80,7 +85,9 @@ You can also build the firmware yourself; see [Building the firmware](#building-
 2. **Find the Mac.** The display finds the bridge by itself, using Bonjour or, if that doesn't get through, a LAN broadcast. You don't need an IP address, and it keeps working if the Mac's IP changes.
 3. **Pair.** The display shows a 4-digit code, and a page opens on your Mac with the same code. Click **Approve**. The display remembers the pairing.
 
-To start over, **hold BOOT for 5 seconds** while the display is running. It forgets the Wi-Fi and the pairing.
+**More Macs:** install the plugin on each one. When the display sees a new Mac on the network, it shows **+ Pair <Mac name>**; tap it and approve the code on that Mac. Plugging the display into that Mac's USB port pairs it too, with no code.
+
+To start over, **hold BOOT for 5 seconds** while the display is running. It forgets the Wi-Fi and all pairings.
 
 ## Building the firmware
 
@@ -114,6 +121,8 @@ arduino-cli upload  --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,Partitio
 .claude-plugin/          plugin + marketplace manifests (plugin name: desk-display)
 hooks/hooks.json         Claude Code hooks -> bridge/claude_dash_hook.py
 scripts/build-firmware.sh  reproducible firmware build -> dist/*.bin (used by CI releases)
+scripts/build-site.sh    browser installer -> _site/ (GitHub Pages)
+site/index.html          the installer page
 .github/workflows/       firmware release workflow (on v* tags)
 LICENSE                  MIT
 docs/                    README screenshots
@@ -132,13 +141,14 @@ firmware/ClaudeDash/
 ## Notes
 
 - **Preview and pairing page:** http://127.0.0.1:8787/ shows what the display shows and lists pending pairing requests. It opens by itself when a display asks to pair.
-- **Bridge settings:** these are in `~/.claude-dash/config.json` (port, `decision_timeout`, paired displays). To revoke a display, delete its entry under `devices`. The bridge log is `~/.claude-dash/bridge.log`.
+- **Bridge settings:** these are in `~/.claude-dash/config.json` (port, `decision_timeout`, `start_at_login`, paired displays). To revoke a display, delete its entry under `devices`. The bridge log is `~/.claude-dash/bridge.log`.
 - **Security:** only localhost can post hook events or approve pairings. A display needs its paired token to read state or answer permission requests.
 - **Raising `decision_timeout`:** if you set it above ~55 s, also raise the `PermissionRequest` timeout in `hooks/hooks.json`.
 - **Demo mode:** `python3 bridge/bridge.py --demo` generates fake sessions and permission requests for testing the display.
 - **Discovery:** the bridge advertises `_claude-dash._tcp` over Bonjour and also answers UDP broadcasts on port 8788. On networks with client isolation, such as guest or office Wi-Fi, neither works; set `BRIDGE_HOST_OVERRIDE` in `config.h`.
 - **Wireless updates:** set `"update_repo": ""` in `~/.claude-dash/config.json` to turn off the release check, or point it at your fork. Downloaded images are kept in `~/.claude-dash/firmware/`.
-- **USB setup:** the bridge only talks to the ESP32's own USB port (vendor ID `0x303a`). It never opens UART adapters, so it can't reset a board or interfere with flashing. To turn it off, set `"usb_setup": false` in `~/.claude-dash/config.json`. Over the cable, the bridge sends `DASH?` and gets back `DASH HELLO {...}`; `DASH DIAG` prints the display's network diagnostics.
+- **Browser installer:** `scripts/build-site.sh` assembles it in `_site/` (page, manifest, firmware). It speaks [Improv](https://www.improv-wifi.com/) to set up Wi-Fi, on both of the board's USB ports. To try it locally: `python3 -m http.server 8090 --directory _site`, then open http://localhost:8090 in Chrome.
+- **USB setup:** the bridge only talks to the ESP32's own USB port (vendor ID `0x303a`). It never opens UART adapters or a port another program has open, so it can't reset a board or interfere with flashing. To turn it off, set `"usb_setup": false` in `~/.claude-dash/config.json`. Over the cable, the bridge sends `DASH?` and gets back `DASH HELLO {...}`; `DASH DIAG` prints the display's network diagnostics.
 
 ## Development
 

@@ -385,7 +385,7 @@ static void runPortal(const char *why) {
     String s = WiFi.SSID(i);
     if (!s.length() || opts.indexOf(">" + htmlEscape(s) + "<") >= 0) continue;
     opts += "<button type=button onclick=\"f.s.value=this.textContent;f.p.focus()\">" + htmlEscape(s) + "</button>";
-    seenArr.add(s);
+    if (shown < 10) seenArr.add(s);        // strongest 10 are plenty for USB setup, keeps DASH HELLO short
     shown++;
   }
   g_visibleSsids = "";

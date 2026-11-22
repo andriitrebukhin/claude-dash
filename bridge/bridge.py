@@ -515,18 +515,37 @@ def notify(title, msg):
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
+def port_in_use(path):
+    """True if another program (a flasher, a serial monitor, Chrome's installer) has the port open."""
+    try:
+        out = subprocess.run(["lsof", "-t", path], capture_output=True, text=True, timeout=5).stdout.strip()
+    except Exception:
+        return False
+    return bool(out)
+
+
 def usb_setup_once(dash, path):
     """Set up a display on `path`. Returns True if it should be checked again later
     (it still needs Wi-Fi), False if it's done or isn't a Claude Dash display."""
+    if port_in_use(path):
+        return True    # someone else is using it (e.g. flashing): try again later
     try:
         fd = serial_open(path)
     except OSError:
-        return True    # busy (serial monitor / flashing) or gone: try again later
+        return True    # gone: try again later
     try:
-        hello = serial_ask(fd, "DASH?", "DASH HELLO", 2.0)
-        if not hello:
-            return False   # not a Claude Dash display
-        info = json.loads(hello)
+        info = None
+        for _ in range(3):                      # a reply can arrive garbled while the board is busy
+            hello = serial_ask(fd, "DASH?", "DASH HELLO", 2.0)
+            if not hello:
+                return False   # not a Claude Dash display
+            try:
+                info = json.loads(hello)
+                break
+            except ValueError:
+                time.sleep(0.5)
+        if info is None:
+            return True        # try again later
         device = clip(ascii_only(str(info.get("device") or "display")), 32)
         setup = {}
         paired_ids = info.get("bids") if isinstance(info.get("bids"), list) else [info.get("bid")]
@@ -593,11 +612,17 @@ def usb_loop(dash):
     Each port is checked once when it appears, and again every minute only while
     that display still needs Wi-Fi."""
     state = {}   # port -> {"at": last check, "again": re-check?}
+    seen = {}    # port -> when it appeared
     while True:
         ports = espressif_ports()
         for gone in set(state) - ports:
             del state[gone]
+        for gone in set(seen) - ports:
+            del seen[gone]
         for p in ports:
+            seen.setdefault(p, time.time())
+            if time.time() - seen[p] < 5:
+                continue   # just appeared (maybe a flasher resetting the board): let it settle
             st = state.get(p)
             if st is None or (st["again"] and time.time() - st["at"] > 60):
                 needs_more = usb_setup_once(dash, p)

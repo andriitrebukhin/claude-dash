@@ -16,7 +16,6 @@ cat > "$SITE/manifest.json" <<JSON
 {
   "name": "Claude Dash",
   "version": "$VERSION",
-  "home_assistant_domain": "",
   "new_install_prompt_erase": false,
   "new_install_improv_wait_time": 20,
   "builds": [
