@@ -38,16 +38,33 @@ This registers `claude_dash_hook.py` for SessionStart/End, UserPromptSubmit, Pre
 
 ## 3. Firmware (ESP32-S3-Touch-LCD-2.1)
 
-1. Arduino IDE, with the **esp32 by Espressif** core **3.x**. Board: *ESP32S3 Dev Module*, Flash 16MB, **PSRAM: OPI PSRAM**, Partition: *16M Flash (3MB APP/9.9MB FATFS)*.
-2. Download Waveshare's demo: https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-2.1/ESP32-S3-Touch-LCD-2.1-Demo.zip
-   - Copy its `Arduino/libraries/*` (LVGL **8.3.x** plus its `lv_conf.h`) into `~/Documents/Arduino/libraries/`.
-   - Copy the driver `.cpp/.h` files from `Arduino/examples/01_LVGL_Arduino/` into `firmware/ClaudeDash/`. Copy everything except the `.ino` and the `LVGL_Example*` files.
-3. Install **ArduinoJson** (v7) from Library Manager.
-4. In `lv_conf.h`, enable `LV_FONT_MONTSERRAT_14`, `_20`, `_28` and `_40`. Other sizes also work, because the UI falls back to what's available.
-5. Copy `firmware/ClaudeDash/config.example.h` to `config.h` (git-ignored) and set Wi-Fi, `BRIDGE_HOST` (the IP the bridge printed, or `yourmac.local`), `BRIDGE_TOKEN` and `TZ_INFO`.
-6. Flash it.
+Tested to compile with **arduino-esp32 core 3.3.13**, LVGL 8.3.10 (from Waveshare's demo) and ArduinoJson 7.4. Waveshare's display driver does **not** build on core 4.x, so stay on 3.x.
 
-`board.cpp` is the only file that touches Waveshare's drivers. If their demo version names the functions differently, copy the init calls from the demo's `setup()` into `board_init()`.
+**Get the vendor pieces** from https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-2.1/ESP32-S3-Touch-LCD-2.1-Demo.zip:
+
+- Copy `Arduino/libraries/lvgl` into your Arduino `libraries/` folder. Its config is `lvgl/src/lv_conf.h`. Set `LV_FONT_MONTSERRAT_20`, `_28` and `_40` to `1`. Without them the UI still works, but with smaller text.
+- Copy only these driver files from `Arduino/examples/LVGL_Arduino/` into `firmware/ClaudeDash/`. They're git-ignored.
+  `Display_ST7701.*`, `TCA9554PWR.*`, `I2C_Driver.*`, `Touch_CST820.*`, `LVGL_Driver.*`.
+  Skip the others. In particular, `Wireless.*` won't build without the BLE library.
+
+**Configure:**
+
+- Copy `firmware/ClaudeDash/config.example.h` to `config.h`. It's git-ignored.
+- Set Wi-Fi, `BRIDGE_HOST` (the IP the bridge printed, or `yourmac.local`), `BRIDGE_TOKEN` and `TZ_INFO`.
+
+**Build and flash with arduino-cli:**
+
+```bash
+arduino-cli core install esp32:esp32@3.3.13
+arduino-cli lib install ArduinoJson
+cd firmware/ClaudeDash
+arduino-cli compile --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB" .
+arduino-cli upload  --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB" -p /dev/cu.usbserial-XXXX .
+```
+
+The board connects through a CH343 USB-serial chip, so the port appears as `/dev/cu.usbserial-*` or `/dev/cu.wchusbserial-*`. In the Arduino IDE, use: *ESP32S3 Dev Module*, Flash 16MB, PSRAM **OPI PSRAM**, Partition *16M Flash (3MB APP/9.9MB FATFS)*.
+
+`board.cpp` is the only file that touches Waveshare's drivers: init, backlight, and the buzzer (TCA9554 pin 8), which chirps when a new permission request arrives.
 
 ## Repo layout
 

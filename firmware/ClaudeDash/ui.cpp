@@ -3,6 +3,7 @@
 #include <lvgl.h>
 #include <time.h>
 #include "ui.h"
+#include "board.h"
 
 // ---------- fonts (fall back to whatever lv_conf.h has) ----------
 #if LV_FONT_MONTSERRAT_40
@@ -331,6 +332,7 @@ void ui_update(const DashState &s) {
       lv_label_set_text(lblDecTool, p->tool);
       lv_label_set_text(lblDecDetail, p->detail);
       setButtonsEnabled(true);
+      board_beep();
     }
     lv_label_set_text_fmt(lblDecHint, "Terminal takes over in %ds", p->expiresIn);
   }
