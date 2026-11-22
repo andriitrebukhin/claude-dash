@@ -13,24 +13,44 @@ Claude Code ──hooks──▶ bridge.py (your Mac, :8787) ◀──Wi-Fi─�
                             └─▶ api.anthropic.com/api/oauth/usage (usage limits)
 ```
 
-## Setup
+## What you need
 
-### 1. Mac: install the plugin (once)
+- A Waveshare **ESP32-S3-Touch-LCD-2.1** board and a USB-C cable
+- A Mac with [Claude Code](https://claude.com/claude-code) and `python3` (comes with Xcode Command Line Tools)
+- 2.4 GHz Wi-Fi shared by the Mac and the display
+
+## Install
+
+### 1. Mac: install the plugin
 
 In Claude Code:
 
 ```
-/plugin marketplace add /path/to/claude-dash
+/plugin marketplace add andriitrebukhin/claude-dash
 /plugin install desk-display@desk-display
 ```
 
-That's all you need to do on the Mac. The plugin's hooks start the bridge in the background the first time Claude Code runs, so there's no daemon to set up. The bridge needs only `python3`, which comes with Xcode Command Line Tools, and it uses only the standard library.
+Or from a terminal:
 
-The first time the bridge runs, expect two macOS prompts:
-- **Firewall**: allow Python to accept incoming connections, so the display can reach it.
+```bash
+claude plugin marketplace add andriitrebukhin/claude-dash
+claude plugin install desk-display@desk-display
+```
+
+That's all you need on the Mac. The plugin's hooks start the bridge in the background on the next Claude Code session; there's no daemon to set up. Sessions that were already open start reporting once you restart them.
+
+- **Update:** `/plugin marketplace update desk-display`, then restart Claude Code. A running bridge keeps its old code until it restarts; to restart it now, run `kill $(lsof -t -iTCP:8787 -sTCP:LISTEN)`, and the next hook starts it again.
+- **Uninstall:** `/plugin uninstall desk-display@desk-display`, and optionally delete `~/.claude-dash/`.
+
+The first time the bridge runs, expect these macOS prompts:
 - **Keychain**: allow `security` to read `Claude Code-credentials`. This is how the bridge gets your usage limits. The token never leaves your Mac except to go to api.anthropic.com. The usage endpoint is undocumented and could change; if it does, the rings show `--` and everything else keeps working.
+- **Firewall** (only if it's on): allow Python to accept incoming connections, so the display can reach it.
 
-### 2. Display: first boot
+### 2. Display: flash the firmware
+
+See [Building the firmware](#building-the-firmware) below. You only do this once; there's nothing to configure.
+
+### 3. Display: first boot
 
 **Option A: plug it into your Mac with USB (easiest).** The bridge notices the display on the cable. It shares your Mac's Wi-Fi (macOS asks once for your password, to read the saved Wi-Fi password) and pairs it. There's no typing and no code. It picks the first of the Mac's saved networks that the display can see, so 5 GHz-only networks are skipped automatically.
 
@@ -47,26 +67,28 @@ There's nothing to configure before flashing. `config.h` has no secrets, so one 
 
 The build was tested with **arduino-esp32 core 3.3.13**, LVGL 8.3.10 (from Waveshare's demo) and ArduinoJson 7.4. Waveshare's display driver does **not** build on core 4.x.
 
-1. Download Waveshare's demo: https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-2.1/ESP32-S3-Touch-LCD-2.1-Demo.zip
+1. Clone this repo: `git clone https://github.com/andriitrebukhin/claude-dash.git`
+2. Download Waveshare's demo: https://files.waveshare.com/wiki/ESP32-S3-Touch-LCD-2.1/ESP32-S3-Touch-LCD-2.1-Demo.zip
    - Copy `Arduino/libraries/lvgl` into your Arduino `libraries/` folder. In `lvgl/src/lv_conf.h`, set these to `1`: `LV_FONT_MONTSERRAT_20`, `_28`, `_40` and `LV_USE_QRCODE`. Without them the UI still works, but with smaller text and no QR code.
    - Copy these driver files from `Arduino/examples/LVGL_Arduino/` into `firmware/ClaudeDash/` (they're git-ignored): `Display_ST7701.*`, `TCA9554PWR.*`, `I2C_Driver.*`, `Touch_CST820.*`, `LVGL_Driver.*`.
-2. Build and flash:
+3. Build and flash. The board shows up as `/dev/cu.usbmodem*`; run `arduino-cli board list` to find it.
 
 ```bash
 arduino-cli core install esp32:esp32@3.3.13
 arduino-cli lib install ArduinoJson
-cd firmware/ClaudeDash
+cd claude-dash/firmware/ClaudeDash
 arduino-cli compile --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,CDCOnBoot=cdc" .
-arduino-cli upload  --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,CDCOnBoot=cdc" -p /dev/cu.usbmodem1101 .
+arduino-cli upload  --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,CDCOnBoot=cdc" -p /dev/cu.usbmodemXXXX .
 ```
 
-The board shows up as `/dev/cu.usbmodem*` (the ESP32-S3's native USB); run `arduino-cli board list` to find it. `CDCOnBoot=cdc` sends the serial log over that same USB cable. In the Arduino IDE, use: *ESP32S3 Dev Module*, Flash 16MB, PSRAM **OPI PSRAM**, Partition *16M Flash (3MB APP/9.9MB FATFS)*, *USB CDC On Boot: Enabled*.
+`CDCOnBoot=cdc` sends the serial log over that same USB cable. In the Arduino IDE, use: *ESP32S3 Dev Module*, Flash 16MB, PSRAM **OPI PSRAM**, Partition *16M Flash (3MB APP/9.9MB FATFS)*, *USB CDC On Boot: Enabled*.
 
 ## Repo layout
 
 ```
 .claude-plugin/          plugin + marketplace manifests (plugin name: desk-display)
 hooks/hooks.json         Claude Code hooks -> bridge/claude_dash_hook.py
+LICENSE                  MIT
 bridge/
   bridge.py              hook events, usage polling, Bonjour advert, pairing, /state, /decision, preview page
   claude_dash_hook.py    runs on each hook event; starts the bridge if it isn't running
@@ -88,3 +110,18 @@ firmware/ClaudeDash/
 - **Demo mode:** `python3 bridge/bridge.py --demo` generates fake sessions and permission requests for testing the display.
 - **Discovery:** the bridge advertises `_claude-dash._tcp` over Bonjour and also answers UDP broadcasts on port 8788. On networks with client isolation, such as guest or office Wi-Fi, neither works; set `BRIDGE_HOST_OVERRIDE` in `config.h`.
 - **USB setup:** to turn it off, set `"usb_setup": false` in `~/.claude-dash/config.json`. Over the cable, the bridge sends `DASH?` and gets back `DASH HELLO {...}`; `DASH DIAG` prints the display's network diagnostics.
+
+## Development
+
+To work on the plugin from a local clone, point Claude Code at the folder instead of GitHub:
+
+```
+/plugin marketplace add /path/to/claude-dash
+/plugin install desk-display@desk-display
+```
+
+`python3 bridge/bridge.py --demo` runs the bridge with fake data, and http://127.0.0.1:8787/ previews the display.
+
+## License
+
+MIT. See [LICENSE](LICENSE). Waveshare's display drivers and LVGL aren't included in this repo; they come under their own licenses.

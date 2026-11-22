@@ -6,5 +6,12 @@
     "esp32",
     "dashboard",
     "hooks"
-  ]
+  ],
+  "license": "MIT",
+  "author": {
+    "name": "Andrii Trebukhin",
+    "url": "https://github.com/andriitrebukhin"
+  },
+  "repository": "https://github.com/andriitrebukhin/claude-dash",
+  "homepage": "https://github.com/andriitrebukhin/claude-dash"
 }
