@@ -17,7 +17,7 @@ and PORT_Z are estimates. Measure your board and set them before printing.
 
 Run:  python claude_dash_case.py          (writes stl/, step/, 3mf/ next to this file)
 """
-from math import cos, radians, sin
+from math import cos, radians, sin, tan
 from pathlib import Path
 
 from build123d import (Align, Axis, Box, Cylinder, Location, Mesher, Plane, Pos, Rot,
@@ -47,6 +47,7 @@ PLUG_W, PLUG_H = 13.5, 8.0                   # slot for a straight USB-C plug
 FIN_W, FIN_T = 30.0, 5.0                     # stand blade
 SLOT_DEPTH = 1.5                             # locating slot in the puck back
 MAGNET_D, MAGNET_H = 6.2, 2.3                # 6 x 2 mm magnets, pocket a bit larger
+BUMPER_D, BUMPER_H = 10.4, 1.0               # recesses for 10 mm silicone bumpers under the Ribbon foot
 MAGNETS_Y = (10.0, -14.0)                    # along the puck's vertical centreline
 TILT = 15.0              # display leans back this much
 PUCK_FRONT = (0.0, -6.0, 76.0)               # world position of the screen centre (x, y back, z up)
@@ -161,12 +162,19 @@ def ribbon():
     # the foot runs forward to just in front of the screen: the bend behind and the foot in
     # front keep it from tipping when you tap the screen
     front_end = Vector(0, PUCK_FRONT[1] - 14, FIN_T / 2)
+    bend_r = 12
     path = FilletPolyline((front_end.Y, front_end.Z), (corner.Y, corner.Z),
-                          (pad_bottom.Y, pad_bottom.Z), (top.Y, top.Z), radius=12)
+                          (pad_bottom.Y, pad_bottom.Z), (top.Y, top.Z), radius=bend_r)
     profile = make_face(offset(path, amount=FIN_T / 2, kind=Kind.ARC))   # band cross-section
     band = Plane.YZ * profile
     stand = extrude(band, amount=FIN_W / 2, both=True)
     stand -= _magnet_pockets()
+    # three bumper recesses under the flat part of the foot: two at the front, one at the back
+    turn = radians(180) - (radians(90) - lean)             # how sharply the band turns at the bend
+    flat_end = corner.Y - bend_r * tan(turn / 2)           # where the bend starts lifting off the desk
+    spots = [(-8.0, front_end.Y + 7), (8.0, front_end.Y + 7), (0.0, flat_end - 7)]
+    for x, y in spots:
+        stand -= Pos(x, y, 0) * Cylinder(BUMPER_D / 2, BUMPER_H, align=(Align.CENTER, Align.CENTER, Align.MIN))
     return stand
 
 
@@ -210,7 +218,44 @@ def export_all():
             x += bb.size.X + 8
             m.add_shape(posed, part_number=name)
         m.write(OUT / "3mf" / f"claude_dash_{concept}.3mf")
+    path, layout = export_ribbon_kit({k: parts[k] for k in ("puck", "ring", "ribbon_stand")})
+    print(f"{path.name}: one {BED:.0f} x {BED:.0f} plate")
     return parts
+
+
+BED = 180.0    # Bambu Lab A1 mini
+
+
+def export_ribbon_kit(parts=None):
+    """Everything for the Ribbon on one A1 mini plate, in print orientation:
+    puck (back down) and ring (front down) at the back, the stand on its side in front.
+    Give the ring black filament (AMS lite), or print it on its own."""
+    parts = parts or {"puck": puck(), "ring": ring(), "ribbon_stand": ribbon()}
+    poses = {"puck": Rot(0, 0, 0), "ring": Rot(180, 0, 0), "ribbon_stand": Rot(0, 90, 0)}
+    posed = {}
+    for name in ("puck", "ring", "ribbon_stand"):
+        shp = poses[name] * parts[name]
+        bb = shp.bounding_box()
+        posed[name] = Pos(-bb.min.X, -bb.min.Y, -bb.min.Z) * shp          # corner at the origin
+    size = {k: v.bounding_box().size for k, v in posed.items()}
+    gap = 8.0
+    row_w = max(size["puck"].X + gap + size["ring"].X, size["ribbon_stand"].X)
+    total_d = size["ribbon_stand"].Y + gap + max(size["puck"].Y, size["ring"].Y)
+    x0, y0 = (BED - row_w) / 2, (BED - total_d) / 2
+    place = {
+        "ribbon_stand": (x0, y0),
+        "puck": (x0, y0 + size["ribbon_stand"].Y + gap),
+        "ring": (x0 + size["puck"].X + gap, y0 + size["ribbon_stand"].Y + gap + (size["puck"].Y - size["ring"].Y) / 2),
+    }
+    m = Mesher(unit=Unit.MM)
+    for name, (x, y) in place.items():
+        m.add_shape(Pos(x, y, 0) * posed[name], part_number=name)
+    m.add_meta_data(name_space="claude-dash", name="layout",
+                    value="Ribbon kit: puck back down, ring front down (black), stand on its side. No supports.",
+                    metadata_type="str", must_preserve=False)
+    path = OUT / "3mf" / "claude_dash_ribbon_kit.3mf"
+    m.write(path)
+    return path, {k: (place[k], size[k]) for k in place}
 
 
 def assembly(concept):

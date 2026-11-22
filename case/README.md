@@ -17,9 +17,10 @@ The puck sits about 3 cm above the desk. That leaves room for a USB-C cable: the
 | `stl/puck.stl` | back down | 86 × 86 × 17.6 | 0.2 mm, 3 walls, 15% gyroid |
 | `stl/ring.stl` | front face down | 82 × 82 × 1.6 | 0.12 mm, 100% infill; black |
 | `stl/halo_stand.stl` | base down | 84 × 84 × 91 | 0.2 mm, 3 walls, 40% infill (heavier = steadier) |
-| `stl/ribbon_stand.stl` | on its side | 93 × 50 × 30 | 0.2 mm, 4 walls, 40% infill |
+| `stl/ribbon_stand.stl` | on its side | 93 × 50 × 30 | 0.2 mm, 4 walls, 40% infill; 3 bumper recesses under the foot |
 
-- `3mf/claude_dash_halo.3mf` and `3mf/claude_dash_ribbon.3mf` contain the puck, ring and stand for each concept, already in print orientation. Bambu Studio may split them over two plates.
+- **`3mf/claude_dash_ribbon_kit.3mf`: the whole Ribbon on one A1 mini plate, ready to slice.** The puck (back down) and ring (front down) are at the back, and the stand lies on its side at the front. Give the ring black filament (with AMS lite), or delete it from this plate and print it separately in black.
+- `3mf/claude_dash_halo.3mf` and `3mf/claude_dash_ribbon.3mf` hold each concept's parts in print orientation, but not arranged on a plate.
 - `step/*.step` are the same parts for editing in Fusion, Onshape or FreeCAD.
 - No supports anywhere. PLA or PETG; matte white or grey PLA looks the most "Apple".
 
@@ -47,7 +48,7 @@ python3 -m venv .venv && .venv/bin/pip install build123d
 2. Press the ring in. If it isn't snug, add a drop of glue at three points.
 3. **Magnets (optional):** two 6 × 2 mm disc magnets in the puck's back and two in the stand, with matching polarity. Or skip the magnets and glue the puck to the stand. The slot on the back of the puck locates it.
 4. Plug a USB-C cable through the slot into the **USB** port: the one at the bottom right as you look at the screen. The plug's body must be at most 13 × 7.5 mm, which most cables are.
-5. **Ribbon:** stick small rubber feet under the foot. It's light, and the feet stop it sliding when you tap the screen.
+5. **Ribbon:** press three **10 mm round silicone bumpers** (the clear self-adhesive kind, 2–3 mm tall) into the recesses under the foot. Two go at the front and one at the back. The stand is light, and the bumpers stop it sliding when you tap the screen.
 
 The right edge of the puck has two pinholes, for **BOOT** and **RESET** (use a SIM tool), plus a slot for the battery switch.
 
