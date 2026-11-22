@@ -52,11 +52,11 @@ The build was tested with **arduino-esp32 core 3.3.13**, LVGL 8.3.10 (from Waves
 arduino-cli core install esp32:esp32@3.3.13
 arduino-cli lib install ArduinoJson
 cd firmware/ClaudeDash
-arduino-cli compile --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB" .
-arduino-cli upload  --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB" -p /dev/cu.usbserial-XXXX .
+arduino-cli compile --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,CDCOnBoot=cdc" .
+arduino-cli upload  --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,CDCOnBoot=cdc" -p /dev/cu.usbmodem1101 .
 ```
 
-The board connects through a CH343 USB-serial chip, so the port appears as `/dev/cu.usbserial-*` or `/dev/cu.wchusbserial-*`. In the Arduino IDE, use: *ESP32S3 Dev Module*, Flash 16MB, PSRAM **OPI PSRAM**, Partition *16M Flash (3MB APP/9.9MB FATFS)*.
+The board shows up as `/dev/cu.usbmodem*` (the ESP32-S3's native USB); run `arduino-cli board list` to find it. `CDCOnBoot=cdc` sends the serial log over that same USB cable. In the Arduino IDE, use: *ESP32S3 Dev Module*, Flash 16MB, PSRAM **OPI PSRAM**, Partition *16M Flash (3MB APP/9.9MB FATFS)*, *USB CDC On Boot: Enabled*.
 
 ## Repo layout
 
