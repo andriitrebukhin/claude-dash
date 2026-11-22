@@ -70,6 +70,7 @@ def load_conf():
         "bridge_id": secrets.token_hex(4),
         "devices": {},            # paired displays: name -> token
         "usb_setup": True,        # give a plugged-in display your Wi-Fi + pairing over USB
+        "start_at_login": True,   # keep the bridge running from login (LaunchAgent managed by the hook)
         "update_repo": "andriitrebukhin/claude-dash",   # GitHub repo whose releases the display updates from ("" = off)
     }
     changed = False

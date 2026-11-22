@@ -19,6 +19,68 @@ from pathlib import Path
 PORT = int(os.environ.get("CLAUDE_DASH_PORT", "8787"))
 STATE_DIR = Path.home() / ".claude-dash"
 BRIDGE = Path(__file__).resolve().parent / "bridge.py"
+LOGIN_LABEL = "com.claude-dash.bridge"
+LOGIN_PLIST = Path.home() / "Library" / "LaunchAgents" / f"{LOGIN_LABEL}.plist"
+
+
+def login_item_plist():
+    # Exits 0 if the plugin was removed, so launchd doesn't keep retrying a missing file.
+    script = f'test -f "{BRIDGE}" && exec "{sys.executable}" "{BRIDGE}" --port {PORT} || exit 0'
+    log = STATE_DIR / "bridge.log"
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>{LOGIN_LABEL}</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/sh</string><string>-c</string><string>{script}</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>30</integer>
+  <key>StandardOutPath</key><string>{log}</string>
+  <key>StandardErrorPath</key><string>{log}</string>
+</dict>
+</plist>
+"""
+
+
+def ensure_login_item():
+    """Keep the bridge's login item (a LaunchAgent) in sync with this plugin's location.
+    Runs on SessionStart. Turn it off with "start_at_login": false in ~/.claude-dash/config.json."""
+    if sys.platform != "darwin":
+        return
+    try:
+        conf = json.loads((STATE_DIR / "config.json").read_text())
+    except Exception:
+        conf = {}
+    domain = f"gui/{os.getuid()}"
+    if conf.get("start_at_login", True) is False:
+        if LOGIN_PLIST.exists():
+            subprocess.run(["launchctl", "bootout", f"{domain}/{LOGIN_LABEL}"], capture_output=True)
+            LOGIN_PLIST.unlink()
+        return
+    want = login_item_plist()
+    if LOGIN_PLIST.exists() and LOGIN_PLIST.read_text() == want:
+        return
+    STATE_DIR.mkdir(exist_ok=True)
+    LOGIN_PLIST.parent.mkdir(parents=True, exist_ok=True)
+    changed_path = LOGIN_PLIST.exists()          # e.g. the plugin moved after an update
+    subprocess.run(["launchctl", "bootout", f"{domain}/{LOGIN_LABEL}"], capture_output=True)
+    LOGIN_PLIST.write_text(want)
+    if changed_path:
+        stop_running_bridge()                    # hand over to the bridge at the new path
+    subprocess.run(["launchctl", "bootstrap", domain, str(LOGIN_PLIST)], capture_output=True)
+
+
+def stop_running_bridge():
+    try:
+        out = subprocess.run(["lsof", "-t", "-nP", f"-iTCP:{PORT}", "-sTCP:LISTEN"],
+                             capture_output=True, text=True, timeout=5).stdout.split()
+        for pid in out:
+            os.kill(int(pid), 15)
+        time.sleep(0.5)
+    except Exception:
+        pass
 
 
 def post(raw, timeout):
@@ -39,6 +101,11 @@ def start_bridge():
     except FileNotFoundError:
         pass
     stamp.touch()
+    if sys.platform == "darwin" and LOGIN_PLIST.exists():
+        # launchd owns the bridge: ask it to (re)start it rather than running a second copy
+        r = subprocess.run(["launchctl", "kickstart", f"gui/{os.getuid()}/{LOGIN_LABEL}"], capture_output=True)
+        if r.returncode == 0:
+            return True
     log = open(STATE_DIR / "bridge.log", "a")
     subprocess.Popen([sys.executable, str(BRIDGE), "--port", str(PORT)],
                      stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
@@ -52,6 +119,11 @@ def main():
         ev = json.loads(raw)
     except Exception:
         return
+    if ev.get("hook_event_name") == "SessionStart":
+        try:
+            ensure_login_item()
+        except Exception:
+            pass
     is_perm = ev.get("hook_event_name") == "PermissionRequest"
     # the bridge enforces the real decision timeout; this is just a safety net
     timeout = 600 if is_perm else 1.5
