@@ -5,7 +5,8 @@
 #define DASH_VERSION "dev"   // release builds pass -DDASH_VERSION="vX.Y.Z"
 #endif
 
-#define MAX_SESSIONS 8
+#define MAX_SESSIONS 12     // across all Macs
+#define MAX_BRIDGES  4      // paired Macs
 #define MAX_PENDING  4
 #define MAX_QUESTIONS 4
 #define MAX_OPTIONS   4
@@ -26,6 +27,7 @@ struct SessionInfo {
   char tool[28];
   char detail[72];
   uint8_t subagents;
+  uint8_t bridge;          // which Mac (page) it belongs to
 };
 
 struct QuestionInfo {     // one AskUserQuestion question
@@ -42,6 +44,7 @@ struct PendingInfo {
   char tool[28];
   char detail[260];
   int  expiresIn;
+  uint8_t bridge;         // which paired Mac asked
   uint8_t nQuestions;     // >0: a multiple-choice question instead of Allow/Deny
   QuestionInfo questions[MAX_QUESTIONS];
 };
@@ -59,20 +62,31 @@ struct SetupInfo {
   char qr[96];       // QR payload, empty = none
 };
 
+struct MacInfo {           // one paired Mac = one page
+  char host[28];
+  bool ok;                 // answering right now
+  bool usageOk;
+  char usageErr[48];
+  UsageWindow fiveHour;
+  UsageWindow week;
+};
+
 struct DashState {
   uint8_t mode;
   SetupInfo setup;
   bool wifiOk;
   bool bridgeOk;
   char clock[8];     // HH:MM from the Mac
-  bool usageOk;
-  char usageErr[48];
-  UsageWindow fiveHour;
-  UsageWindow week;
   uint8_t nSessions;
   SessionInfo sessions[MAX_SESSIONS];
   uint8_t nPending;
   PendingInfo pending[MAX_PENDING];
+  MacInfo macs[MAX_BRIDGES];
+  uint8_t nBridges;    // paired Macs
+  uint8_t nBridgesOk;  // ...reachable right now
+  uint8_t nCandidates; // unpaired Macs seen on the network
+  char candHost[28];   // name of the first one, for the "Pair" button
+  bool pairCancelable; // MODE_PAIR for an extra Mac: tap to cancel
   char fwLatest[24];   // newest firmware the bridge can serve ("" = none)
   uint32_t fwSize;
   char fwMd5[36];
@@ -86,4 +100,7 @@ bool net_snapshot(DashState &out, uint32_t &lastSeq);
 // (chosen option indexes per question).
 // Ask the net task to download and install the firmware the bridge offers.
 void net_start_update();
+// Pair with the first unpaired Mac seen on the network / stop pairing.
+void net_pair_candidate();
+void net_cancel_pair();
 void net_send_decision(const char *id, const char *behavior, const char *answersJson = nullptr);

@@ -84,6 +84,22 @@ def load_conf():
     return conf
 
 
+def mac_name():
+    """Human name of this computer, e.g. "Andrii's MacBook Pro" (ASCII, short)."""
+    name = ""
+    if sys.platform == "darwin":
+        try:
+            name = subprocess.run(["scutil", "--get", "ComputerName"], capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception:
+            pass
+    name = name or socket.gethostname().split(".")[0]
+    name = "".join(c for c in unicodedata.normalize("NFKD", name.replace("\u2019", "'")) if 32 <= ord(c) < 127)
+    return name[:24] or "Mac"
+
+
+HOST_NAME = os.environ.get("CLAUDE_DASH_HOST") or mac_name()
+
+
 def save_conf(conf):
     tmp = CONF_FILE.with_suffix(".tmp")
     tmp.write_text(json.dumps(conf, indent=2))
@@ -112,7 +128,7 @@ def advertise(conf):
             zc = Zeroconf()
             info = ServiceInfo("_claude-dash._tcp.local.", f"Claude Dash {socket.gethostname()}._claude-dash._tcp.local.",
                                addresses=[socket.inet_aton(lan_ip())], port=conf["port"],
-                               properties={"id": conf["bridge_id"], "v": "1"})
+                               properties={"id": conf["bridge_id"], "host": HOST_NAME, "v": "1"})
             zc.register_service(info)
             atexit.register(zc.close)
         except Exception as e:  # noqa: BLE001
@@ -120,7 +136,7 @@ def advertise(conf):
         return
     name = f"Claude Dash {socket.gethostname().split('.')[0]}"
     proc = subprocess.Popen(["dns-sd", "-R", name, "_claude-dash._tcp", "local", str(conf["port"]),
-                             f"id={conf['bridge_id']}", "v=1"],
+                             f"id={conf['bridge_id']}", f"host={HOST_NAME}", "v=1"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     atexit.register(proc.terminate)
 
@@ -133,11 +149,13 @@ def udp_discovery_loop(conf):
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)   # several bridges on one machine (tests)
         sock.bind(("0.0.0.0", DISCOVERY_UDP_PORT))
     except OSError as e:
         print(f"UDP discovery unavailable: {e}", flush=True)
         return
-    reply = f"CLAUDE-DASH {conf['port']} {conf['bridge_id']}".encode()
+    reply = f"CLAUDE-DASH {conf['port']} {conf['bridge_id']} {HOST_NAME}".encode()
     while True:
         try:
             data, addr = sock.recvfrom(256)
@@ -243,6 +261,7 @@ class Dash:
             if p["status"] == "approved":
                 out["token"] = p["token"]
                 out["bridge_id"] = self.conf["bridge_id"]
+                out["host"] = HOST_NAME
                 del self.pairings[req]   # hand the token out exactly once
             return out
 
@@ -424,7 +443,7 @@ class Dash:
                     usage[k] = dict(w, resets_in=max(0, int(w["resets_at"] - now)))
         fw = self.firmware
         extra = {"firmware": {k: fw[k] for k in ("latest", "size", "md5")}} if fw else {}
-        return {**extra, "ts": int(now), "clock": time.strftime("%H:%M"), "usage": usage, "sessions": sessions[:8], "pending": pending[:4]}
+        return {**extra, "ts": int(now), "host": HOST_NAME, "clock": time.strftime("%H:%M"), "usage": usage, "sessions": sessions[:8], "pending": pending[:4]}
 
 
 # ---------------- USB setup ----------------
@@ -510,12 +529,13 @@ def usb_setup_once(dash, path):
         info = json.loads(hello)
         device = clip(ascii_only(str(info.get("device") or "display")), 32)
         setup = {}
-        if not info.get("paired") or info.get("bid") != dash.conf["bridge_id"]:
+        paired_ids = info.get("bids") if isinstance(info.get("bids"), list) else [info.get("bid")]
+        if dash.conf["bridge_id"] not in paired_ids:
             tok = dash.conf["devices"].get(device) or secrets.token_urlsafe(18)
             with dash.lock:
                 dash.conf["devices"][device] = tok
                 save_conf(dash.conf)
-            setup.update(token=tok, bid=dash.conf["bridge_id"])
+            setup.update(token=tok, bid=dash.conf["bridge_id"], host=HOST_NAME)
         if info.get("mode") == MODE_PORTAL and time.time() > dash.usb_wifi_skip.get(device, 0):
             visible = set(info.get("ssids") or [])
             ssid = next((n for n in preferred_networks() if n in visible), None)
@@ -808,6 +828,8 @@ def make_handler(dash):
                 return
             if u.path == "/pair/status":
                 return self._send(200, dash.pair_status(parse_qs(u.query).get("req", [""])[0]))
+            if u.path == "/id":
+                return self._send(200, {"id": dash.conf["bridge_id"], "host": HOST_NAME})
             if u.path == "/displays" and self._local():
                 now = int(time.time())
                 return self._send(200, {k: dict(v, ago=now - v["seen"]) for k, v in dash.displays.items()})

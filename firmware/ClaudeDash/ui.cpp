@@ -57,12 +57,43 @@ static lv_obj_t *arc5, *arcWeek, *lblPct, *lblSub, *lblWeek, *list, *lblEmpty, *
 static Row rows[MAX_SESSIONS];
 static lv_obj_t *setupScr, *lblSetupTitle, *lblSetupBig, *lblSetupSub, *lblSetupHint, *qr;
 static char lastQr[96] = "";
+static bool setupCancelable = false;
+static void onSetupTap(lv_event_t *) { if (setupCancelable) net_cancel_pair(); }
 static char clockText[8] = "--:--";
 static lv_obj_t *dec, *lblDecTitle, *lblDecSession, *lblDecTool, *lblDecDetail, *btnAllow, *btnDeny, *lblDecHint;
 
 static char curPending[24] = "";
 static struct { char id[24]; uint32_t at; } sent[6];
 static int workingCount = 0;
+static uint8_t macsPaired = 0, macsOk = 0;
+
+// ---------- pages: one per paired Mac, switched by swiping left/right ----------
+static int curPage = 0;
+static char pageHost[28] = "";
+static const DashState *lastState = nullptr;
+static lv_obj_t *pageDots[MAX_BRIDGES];
+static void renderDashboard(const DashState &s);
+
+static void slideIn(int dir) {   // list slides in from the side we swiped towards
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, list);
+  lv_anim_set_values(&a, dir * 70, 0);
+  lv_anim_set_time(&a, 180);
+  lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+  lv_anim_set_exec_cb(&a, [](void *o, int32_t v) { lv_obj_set_style_translate_x((lv_obj_t *)o, v, 0); });
+  lv_anim_start(&a);
+}
+
+static void onGesture(lv_event_t *) {
+  if (!lastState || lastState->nBridges < 2) return;
+  lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());
+  int next = curPage + (dir == LV_DIR_LEFT ? 1 : dir == LV_DIR_RIGHT ? -1 : 0);
+  if (next < 0 || next >= lastState->nBridges || next == curPage) return;
+  curPage = next;
+  renderDashboard(*lastState);
+  slideIn(dir == LV_DIR_LEFT ? 1 : -1);
+}
 static bool linkOk = false, wifiOk = false;
 
 // ---------- helpers ----------
@@ -307,6 +338,7 @@ static void buildQuestionOverlay() {
 // ---------- firmware update offer ----------
 static lv_obj_t *btnUpdatePill, *lblUpdatePill, *updCard, *lblUpdVer, *lblUpdSub;
 static char offeredVer[24] = "";
+static bool pillIsPair = false;
 static char dismissedVer[24] = "";
 
 // "v1.2.3-test" -> 1002003 (suffix ignored); anything unparseable -> 0
@@ -318,6 +350,11 @@ static long versionNum(const char *v) {
 }
 
 static void onUpdatePill(lv_event_t *) {
+  if (pillIsPair) {                       // "Pair <Mac>": start the code flow with that Mac
+    lv_obj_add_flag(btnUpdatePill, LV_OBJ_FLAG_HIDDEN);
+    net_pair_candidate();
+    return;
+  }
   lv_label_set_text(lblUpdVer, offeredVer);
   lv_label_set_text(lblUpdSub, "Installed: " DASH_VERSION "\nTakes about a minute; the display restarts.");
   lv_obj_clear_flag(updCard, LV_OBJ_FLAG_HIDDEN);
@@ -337,14 +374,17 @@ static void onUpdateNow(lv_event_t *) {
 
 static void buildUpdateUi(lv_obj_t *scr) {
   btnUpdatePill = lv_btn_create(scr);
-  lv_obj_set_size(btnUpdatePill, 190, 30);
-  lv_obj_align(btnUpdatePill, LV_ALIGN_BOTTOM_MID, 0, -74);
+  lv_obj_set_size(btnUpdatePill, 220, 30);
+  lv_obj_align(btnUpdatePill, LV_ALIGN_BOTTOM_MID, 0, -70);
   lv_obj_set_style_radius(btnUpdatePill, 15, 0);
   lv_obj_set_style_bg_color(btnUpdatePill, C_CARD, 0);
   lv_obj_set_style_border_color(btnUpdatePill, C_ACCENT, 0);
   lv_obj_set_style_border_width(btnUpdatePill, 1, 0);
   lv_obj_set_style_shadow_width(btnUpdatePill, 0, 0);
   lblUpdatePill = label(btnUpdatePill, F_S, C_ACCENT);
+  lv_obj_set_width(lblUpdatePill, 200);
+  lv_obj_set_style_text_align(lblUpdatePill, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_long_mode(lblUpdatePill, LV_LABEL_LONG_DOT);
   lv_obj_center(lblUpdatePill);
   lv_obj_add_event_cb(btnUpdatePill, onUpdatePill, LV_EVENT_CLICKED, nullptr);
   lv_obj_add_flag(btnUpdatePill, LV_OBJ_FLAG_HIDDEN);
@@ -439,6 +479,7 @@ void ui_init() {
     lv_obj_align(r.dot, LV_ALIGN_LEFT_MID, 10, 0);
 
     r.name = label(r.box, F_M, C_TEXT);
+    lv_label_set_recolor(r.name, true);   // "project #87867F Mac#" when several Macs are paired
     lv_obj_set_width(r.name, 200);
     lv_label_set_long_mode(r.name, LV_LABEL_LONG_DOT);
     lv_obj_align(r.name, LV_ALIGN_TOP_LEFT, 28, 6);
@@ -462,6 +503,16 @@ void ui_init() {
 
   buildUpdateUi(scr);
 
+  lv_obj_add_event_cb(scr, onGesture, LV_EVENT_GESTURE, nullptr);
+  for (int i = 0; i < MAX_BRIDGES; i++) {
+    pageDots[i] = lv_obj_create(scr);
+    lv_obj_set_size(pageDots[i], 8, 8);
+    lv_obj_set_style_radius(pageDots[i], LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(pageDots[i], 0, 0);
+    lv_obj_clear_flag(pageDots[i], LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(pageDots[i], LV_OBJ_FLAG_HIDDEN);
+  }
+
   // ----- setup overlay: Wi-Fi setup, discovery, pairing -----
   setupScr = lv_obj_create(lv_layer_top());
   lv_obj_set_size(setupScr, 480, 480);
@@ -472,6 +523,8 @@ void ui_init() {
   lv_obj_set_style_border_width(setupScr, 0, 0);
   lv_obj_set_style_pad_all(setupScr, 0, 0);
   lv_obj_clear_flag(setupScr, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(setupScr, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(setupScr, onSetupTap, LV_EVENT_CLICKED, nullptr);
 
   lblSetupTitle = label(setupScr, F_S, C_ACCENT);
   lv_obj_align(lblSetupTitle, LV_ALIGN_TOP_MID, 0, 70);
@@ -538,9 +591,10 @@ void ui_init() {
 
 // ---------- update ----------
 void ui_update(const DashState &s) {
-  char a[24], b[24], buf[96];
   wifiOk = s.wifiOk;
   linkOk = s.bridgeOk;
+  macsPaired = s.nBridges;
+  macsOk = s.nBridgesOk;
   if (s.clock[0]) strlcpy(clockText, s.clock, sizeof(clockText));
 
   // setup / pairing screens cover the dashboard until we're running
@@ -552,7 +606,9 @@ void ui_update(const DashState &s) {
     lv_label_set_text(lblSetupTitle, s.setup.title);
     lv_label_set_text(lblSetupBig, s.setup.big);
     lv_label_set_text(lblSetupSub, s.setup.sub);
-    lv_label_set_text(lblSetupHint, (s.mode == MODE_PAIR || s.mode == MODE_PORTAL || s.mode == MODE_UPDATE) ? "" : "Hold BOOT 5 s to reset");
+    if (s.mode == MODE_PAIR && s.pairCancelable) lv_label_set_text(lblSetupHint, "Tap to cancel");
+    else lv_label_set_text(lblSetupHint, (s.mode == MODE_PAIR || s.mode == MODE_PORTAL || s.mode == MODE_UPDATE) ? "" : "Hold BOOT 5 s to reset");
+    setupCancelable = s.mode == MODE_PAIR && s.pairCancelable;
     lv_obj_add_flag(updCard, LV_OBJ_FLAG_HIDDEN);
 #if LV_USE_QRCODE
     if (s.setup.qr[0]) {
@@ -569,74 +625,24 @@ void ui_update(const DashState &s) {
   }
   lv_obj_add_flag(setupScr, LV_OBJ_FLAG_HIDDEN);
 
-  // firmware update offer: only for a newer release than what's running
+  // pill above the status line: firmware update first, otherwise "Pair <Mac>" for a new Mac on the network
   if (s.bridgeOk && s.fwLatest[0] && versionNum(s.fwLatest) > versionNum(DASH_VERSION) && strcmp(s.fwLatest, dismissedVer)) {
-    if (strcmp(offeredVer, s.fwLatest)) {
+    if (pillIsPair || strcmp(offeredVer, s.fwLatest)) {
       strlcpy(offeredVer, s.fwLatest, sizeof(offeredVer));
       lv_label_set_text_fmt(lblUpdatePill, LV_SYMBOL_DOWNLOAD "  Update to %s", offeredVer);
     }
+    pillIsPair = false;
+    lv_obj_clear_flag(btnUpdatePill, LV_OBJ_FLAG_HIDDEN);
+  } else if (s.nCandidates > 0 && s.nBridges < MAX_BRIDGES) {
+    lv_label_set_text_fmt(lblUpdatePill, LV_SYMBOL_PLUS "  Pair %s", s.candHost);
+    pillIsPair = true;
     lv_obj_clear_flag(btnUpdatePill, LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(btnUpdatePill, LV_OBJ_FLAG_HIDDEN);
   }
 
-  // usage rings
-  if (!s.wifiOk || !s.bridgeOk) {
-    lv_label_set_text(lblPct, "--");
-    lv_label_set_text(lblSub, s.wifiOk ? "Bridge offline" : "Connecting to Wi-Fi...");
-    lv_obj_set_style_text_color(lblSub, C_MUTED, 0);
-    lv_label_set_text(lblWeek, "");
-  } else if (!s.usageOk || !s.fiveHour.valid) {
-    lv_label_set_text(lblPct, "--");
-    lv_label_set_text(lblSub, s.usageErr[0] ? s.usageErr : "Usage unavailable");
-    lv_obj_set_style_text_color(lblSub, C_MUTED, 0);
-    lv_label_set_text(lblWeek, "");
-    lv_arc_set_value(arc5, 0);
-    lv_arc_set_value(arcWeek, 0);
-  } else {
-    float p = s.fiveHour.pct;
-    lv_label_set_text_fmt(lblPct, "%d%%", (int)(p + 0.5f));
-    fmtDur(s.fiveHour.resetsIn, a, sizeof(a));
-    snprintf(buf, sizeof(buf), "5-hour limit - resets %s", a);
-    lv_label_set_text(lblSub, buf);
-    lv_arc_set_value(arc5, (int)constrain(p + 0.5f, 0, 100));
-    lv_color_t c5 = usageColor(p, C_ACCENT);
-    lv_obj_set_style_arc_color(arc5, c5, LV_PART_INDICATOR);
-    lv_obj_set_style_text_color(lblSub, c5, 0);
-    if (s.week.valid) {
-      fmtDur(s.week.resetsIn, b, sizeof(b));
-      snprintf(buf, sizeof(buf), "Week %d%% - resets %s", (int)(s.week.pct + 0.5f), b);
-      lv_label_set_text(lblWeek, buf);
-      lv_arc_set_value(arcWeek, (int)constrain(s.week.pct + 0.5f, 0, 100));
-      lv_color_t cw = usageColor(s.week.pct, C_WEEK);
-      lv_obj_set_style_arc_color(arcWeek, cw, LV_PART_INDICATOR);
-      lv_obj_set_style_text_color(lblWeek, cw, 0);
-    } else {
-      lv_label_set_text(lblWeek, "");
-    }
-  }
-
-  // sessions
-  workingCount = 0;
-  for (int i = 0; i < MAX_SESSIONS; i++) {
-    Row &r = rows[i];
-    if (i >= s.nSessions || !s.bridgeOk) { lv_obj_add_flag(r.box, LV_OBJ_FLAG_HIDDEN); continue; }
-    const SessionInfo &x = s.sessions[i];
-    if (!strcmp(x.state, "working")) workingCount++;
-    lv_obj_clear_flag(r.box, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_set_style_bg_color(r.dot, stateColor(x.state), 0);
-    lv_label_set_text(r.name, x.name);
-    if (x.tool[0]) { snprintf(buf, sizeof(buf), "%s: %s", x.tool, x.detail); lv_label_set_text(r.detail, buf); }
-    else lv_label_set_text(r.detail, x.detail);
-    if (x.subagents) lv_label_set_text_fmt(r.badge, "+%d agent%s", x.subagents, x.subagents > 1 ? "s" : "");
-    else if (!strcmp(x.state, "decision")) lv_label_set_text(r.badge, "needs you");
-    else if (!strcmp(x.state, "waiting")) lv_label_set_text(r.badge, "waiting");
-    else if (!strcmp(x.state, "idle")) lv_label_set_text(r.badge, "idle");
-    else lv_label_set_text(r.badge, "");
-    lv_obj_set_style_text_color(r.badge, strcmp(x.state, "decision") ? C_MUTED : C_PERM, 0);
-  }
-  if (s.bridgeOk && s.nSessions == 0) lv_obj_clear_flag(lblEmpty, LV_OBJ_FLAG_HIDDEN);
-  else lv_obj_add_flag(lblEmpty, LV_OBJ_FLAG_HIDDEN);
+  lastState = &s;
+  renderDashboard(s);
 
   // decisions: show the oldest one we haven't answered yet
   const PendingInfo *p = nullptr;
@@ -677,10 +683,98 @@ void ui_update(const DashState &s) {
   }
 }
 
+// Usage rings, sessions and page dots for the current page (Mac).
+static void renderDashboard(const DashState &s) {
+  char a[24], b[24], buf[96];
+  int nPages = s.nBridges > 0 ? s.nBridges : 1;
+  if (curPage >= nPages) curPage = nPages - 1;
+  const MacInfo &m = s.macs[curPage];
+  strlcpy(pageHost, nPages > 1 ? m.host : "", sizeof(pageHost));
+
+  // usage rings
+  if (!s.wifiOk || !m.ok) {
+    lv_label_set_text(lblPct, "--");
+    if (!s.wifiOk) lv_label_set_text(lblSub, "Connecting to Wi-Fi...");
+    else if (nPages > 1) lv_label_set_text_fmt(lblSub, "%s is offline", m.host);
+    else lv_label_set_text(lblSub, "Mac offline");
+    lv_obj_set_style_text_color(lblSub, C_MUTED, 0);
+    lv_label_set_text(lblWeek, "");
+    lv_arc_set_value(arc5, 0);
+    lv_arc_set_value(arcWeek, 0);
+  } else if (!m.usageOk || !m.fiveHour.valid) {
+    lv_label_set_text(lblPct, "--");
+    lv_label_set_text(lblSub, m.usageErr[0] ? m.usageErr : "Usage unavailable");
+    lv_obj_set_style_text_color(lblSub, C_MUTED, 0);
+    lv_label_set_text(lblWeek, "");
+    lv_arc_set_value(arc5, 0);
+    lv_arc_set_value(arcWeek, 0);
+  } else {
+    float p = m.fiveHour.pct;
+    lv_label_set_text_fmt(lblPct, "%d%%", (int)(p + 0.5f));
+    fmtDur(m.fiveHour.resetsIn, a, sizeof(a));
+    snprintf(buf, sizeof(buf), "5-hour limit - resets %s", a);
+    lv_label_set_text(lblSub, buf);
+    lv_arc_set_value(arc5, (int)constrain(p + 0.5f, 0, 100));
+    lv_color_t c5 = usageColor(p, C_ACCENT);
+    lv_obj_set_style_arc_color(arc5, c5, LV_PART_INDICATOR);
+    lv_obj_set_style_text_color(lblSub, c5, 0);
+    if (m.week.valid) {
+      fmtDur(m.week.resetsIn, b, sizeof(b));
+      snprintf(buf, sizeof(buf), "Week %d%% - resets %s", (int)(m.week.pct + 0.5f), b);
+      lv_label_set_text(lblWeek, buf);
+      lv_arc_set_value(arcWeek, (int)constrain(m.week.pct + 0.5f, 0, 100));
+      lv_color_t cw = usageColor(m.week.pct, C_WEEK);
+      lv_obj_set_style_arc_color(arcWeek, cw, LV_PART_INDICATOR);
+      lv_obj_set_style_text_color(lblWeek, cw, 0);
+    } else {
+      lv_label_set_text(lblWeek, "");
+    }
+  }
+
+  // sessions of this Mac
+  workingCount = 0;
+  int row = 0;
+  bool attention[MAX_BRIDGES] = {};
+  for (int i = 0; i < s.nSessions; i++) {
+    const SessionInfo &x = s.sessions[i];
+    if (!strcmp(x.state, "decision") || !strcmp(x.state, "waiting")) attention[x.bridge] = true;
+    if (x.bridge != curPage || row >= MAX_SESSIONS) continue;
+    if (!strcmp(x.state, "working")) workingCount++;
+    Row &r = rows[row++];
+    lv_obj_clear_flag(r.box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_bg_color(r.dot, stateColor(x.state), 0);
+    lv_label_set_text(r.name, x.name);
+    if (x.tool[0]) { snprintf(buf, sizeof(buf), "%s: %s", x.tool, x.detail); lv_label_set_text(r.detail, buf); }
+    else lv_label_set_text(r.detail, x.detail);
+    if (x.subagents) lv_label_set_text_fmt(r.badge, "+%d agent%s", x.subagents, x.subagents > 1 ? "s" : "");
+    else if (!strcmp(x.state, "decision")) lv_label_set_text(r.badge, "needs you");
+    else if (!strcmp(x.state, "waiting")) lv_label_set_text(r.badge, "waiting");
+    else if (!strcmp(x.state, "idle")) lv_label_set_text(r.badge, "idle");
+    else lv_label_set_text(r.badge, "");
+    lv_obj_set_style_text_color(r.badge, strcmp(x.state, "decision") ? C_MUTED : C_PERM, 0);
+  }
+  for (int i = row; i < MAX_SESSIONS; i++) lv_obj_add_flag(rows[i].box, LV_OBJ_FLAG_HIDDEN);
+  if (m.ok && row == 0) lv_obj_clear_flag(lblEmpty, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(lblEmpty, LV_OBJ_FLAG_HIDDEN);
+
+  // page dots, centred just under the list; yellow = that Mac has something waiting for you
+  for (int i = 0; i < MAX_BRIDGES; i++) {
+    if (nPages < 2 || i >= nPages) { lv_obj_add_flag(pageDots[i], LV_OBJ_FLAG_HIDDEN); continue; }
+    lv_obj_clear_flag(pageDots[i], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(pageDots[i], LV_ALIGN_TOP_MID, (i - (nPages - 1) / 2.0f) * 16, 368);
+    lv_color_t c = i == curPage ? C_TEXT : attention[i] ? C_AMBER : C_TRACK;
+    lv_obj_set_style_bg_color(pageDots[i], c, 0);
+  }
+}
+
 void ui_tick() {
   static uint32_t last = 0;
   if (millis() - last < 1000) return;
   last = millis();
-  const char *dotColor = linkOk ? "7FB77E" : wifiOk ? "E8B04B" : "E5544B";
-  lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "#  %s  -  %d working", dotColor, clockText, workingCount);
+  const char *dotColor = linkOk ? "4EBA65" : wifiOk ? "FFC107" : "FF6B80";
+  if (pageHost[0])
+    lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "#  %.14s  -  %s  -  %d working", dotColor, pageHost, clockText,
+                          workingCount);
+  else
+    lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "#  %s  -  %d working", dotColor, clockText, workingCount);
 }

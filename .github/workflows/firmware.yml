@@ -9,6 +9,8 @@ on:
 
 permissions:
   contents: write
+  pages: write
+  id-token: write
 
 jobs:
   build:
@@ -36,6 +38,15 @@ jobs:
           name: claude-dash-firmware
           path: dist/*
 
+      - name: Build installer site
+        run: scripts/build-site.sh
+        env:
+          VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
       - name: Release
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
@@ -45,10 +56,9 @@ jobs:
           body: |
             ## Flash the display
 
-            **Easiest: from your browser (Chrome or Edge, no install).**
-            1. Download `claude-dash-${{ github.ref_name }}-full.bin`.
-            2. Open https://espressif.github.io/esptool-js/, click **Connect** and pick the board's USB port.
-            3. Set the flash address to `0x0`, choose the file, and click **Program**.
+            **Easiest: one click in Chrome or Edge:** https://andriitrebukhin.github.io/claude-dash/ installs the firmware and sets up Wi-Fi.
+
+            **Or manually:** download `claude-dash-${{ github.ref_name }}-full.bin`, open https://espressif.github.io/esptool-js/, connect, and program it at `0x0`.
 
             **Or with esptool:** `esptool --chip esp32s3 write-flash 0x0 claude-dash-${{ github.ref_name }}-full.bin`
 
@@ -59,3 +69,15 @@ jobs:
             Then install the Mac plugin and set up the display as described in the [README](https://github.com/andriitrebukhin/claude-dash#install).
 
             The images include Waveshare's display/touch drivers and LVGL 8.3, built from Waveshare's demo package for the ESP32-S3-Touch-LCD-2.1.
+
+  # Publishes the browser installer (needs Settings > Pages > Source: GitHub Actions).
+  pages:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
