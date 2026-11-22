@@ -1,0 +1,16 @@
+# local secrets: copy config.example.h -> config.h
+firmware/ClaudeDash/config.h
+# Waveshare demo drivers you copy in (vendor code, not part of this repo)
+firmware/ClaudeDash/*
+!firmware/ClaudeDash/ClaudeDash.ino
+!firmware/ClaudeDash/board.cpp
+!firmware/ClaudeDash/board.h
+!firmware/ClaudeDash/net.cpp
+!firmware/ClaudeDash/ui.cpp
+!firmware/ClaudeDash/ui.h
+!firmware/ClaudeDash/dash_state.h
+!firmware/ClaudeDash/config.example.h
+__pycache__/
+*.pyc
+.DS_Store
+build/

@@ -1,0 +1,348 @@
+// LVGL 8.3 UI for the 480x480 round panel.
+// Enable in lv_conf.h for best looks: LV_FONT_MONTSERRAT_14, _20, _28, _40
+#include <lvgl.h>
+#include <time.h>
+#include "ui.h"
+
+// ---------- fonts (fall back to whatever lv_conf.h has) ----------
+#if LV_FONT_MONTSERRAT_40
+  #define F_XL &lv_font_montserrat_40
+#elif LV_FONT_MONTSERRAT_36
+  #define F_XL &lv_font_montserrat_36
+#elif LV_FONT_MONTSERRAT_32
+  #define F_XL &lv_font_montserrat_32
+#else
+  #define F_XL LV_FONT_DEFAULT
+#endif
+#if LV_FONT_MONTSERRAT_28
+  #define F_L &lv_font_montserrat_28
+#elif LV_FONT_MONTSERRAT_24
+  #define F_L &lv_font_montserrat_24
+#else
+  #define F_L LV_FONT_DEFAULT
+#endif
+#if LV_FONT_MONTSERRAT_20
+  #define F_M &lv_font_montserrat_20
+#elif LV_FONT_MONTSERRAT_18
+  #define F_M &lv_font_montserrat_18
+#elif LV_FONT_MONTSERRAT_16
+  #define F_M &lv_font_montserrat_16
+#else
+  #define F_M LV_FONT_DEFAULT
+#endif
+#if LV_FONT_MONTSERRAT_14
+  #define F_S &lv_font_montserrat_14
+#else
+  #define F_S LV_FONT_DEFAULT
+#endif
+
+// ---------- palette ----------
+#define C_BG     lv_color_hex(0x141413)
+#define C_CARD   lv_color_hex(0x1E1D1A)
+#define C_TRACK  lv_color_hex(0x2A2925)
+#define C_TEXT   lv_color_hex(0xF0EEE6)
+#define C_MUTED  lv_color_hex(0x8A877D)
+#define C_ACCENT lv_color_hex(0xD97757)
+#define C_WEEK   lv_color_hex(0xC2B8A3)
+#define C_GREEN  lv_color_hex(0x7FB77E)
+#define C_AMBER  lv_color_hex(0xE8B04B)
+#define C_RED    lv_color_hex(0xE5544B)
+#define C_BTN    lv_color_hex(0x3A3935)
+
+struct Row { lv_obj_t *box, *dot, *name, *detail, *badge; };
+
+static lv_obj_t *arc5, *arcWeek, *lblPct, *lblSub, *lblWeek, *list, *lblEmpty, *lblStatus;
+static Row rows[MAX_SESSIONS];
+static lv_obj_t *dec, *lblDecTitle, *lblDecSession, *lblDecTool, *lblDecDetail, *btnAllow, *btnDeny, *lblDecHint;
+
+static char curPending[24] = "";
+static struct { char id[24]; uint32_t at; } sent[6];
+static int workingCount = 0;
+static bool linkOk = false, wifiOk = false;
+
+// ---------- helpers ----------
+static lv_obj_t *label(lv_obj_t *parent, const lv_font_t *f, lv_color_t c) {
+  lv_obj_t *l = lv_label_create(parent);
+  lv_obj_set_style_text_font(l, f, 0);
+  lv_obj_set_style_text_color(l, c, 0);
+  lv_label_set_text(l, "");
+  return l;
+}
+
+static lv_obj_t *ring(lv_obj_t *parent, int size, int width, lv_color_t c) {
+  lv_obj_t *a = lv_arc_create(parent);
+  lv_obj_set_size(a, size, size);
+  lv_obj_center(a);
+  lv_arc_set_bg_angles(a, 135, 45);
+  lv_arc_set_range(a, 0, 100);
+  lv_arc_set_value(a, 0);
+  lv_obj_remove_style(a, NULL, LV_PART_KNOB);
+  lv_obj_clear_flag(a, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_set_style_arc_width(a, width, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(a, width, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(a, C_TRACK, LV_PART_MAIN);
+  lv_obj_set_style_arc_color(a, c, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_rounded(a, true, LV_PART_MAIN);
+  lv_obj_set_style_arc_rounded(a, true, LV_PART_INDICATOR);
+  return a;
+}
+
+static void fmtDur(long s, char *out, size_t n) {
+  if (s < 0) { strlcpy(out, "?", n); return; }
+  long d = s / 86400, h = (s % 86400) / 3600, m = (s % 3600) / 60;
+  if (d) snprintf(out, n, "%ldd %ldh", d, h);
+  else if (h) snprintf(out, n, "%ldh %02ldm", h, m);
+  else snprintf(out, n, "%ldm", m);
+}
+
+static lv_color_t stateColor(const char *st) {
+  if (!strcmp(st, "working")) return C_GREEN;
+  if (!strcmp(st, "decision")) return C_ACCENT;
+  if (!strcmp(st, "waiting")) return C_AMBER;
+  return C_MUTED;
+}
+
+static bool wasSent(const char *id) {
+  for (auto &s : sent)
+    if (s.id[0] && !strcmp(s.id, id) && millis() - s.at < 15000) return true;
+  return false;
+}
+
+static void markSent(const char *id) {
+  int oldest = 0;
+  for (int i = 1; i < 6; i++) if (sent[i].at < sent[oldest].at) oldest = i;
+  strlcpy(sent[oldest].id, id, sizeof(sent[oldest].id));
+  sent[oldest].at = millis();
+}
+
+static void setButtonsEnabled(bool en) {
+  if (en) { lv_obj_clear_state(btnAllow, LV_STATE_DISABLED); lv_obj_clear_state(btnDeny, LV_STATE_DISABLED); }
+  else    { lv_obj_add_state(btnAllow, LV_STATE_DISABLED);   lv_obj_add_state(btnDeny, LV_STATE_DISABLED); }
+}
+
+static void onDecision(lv_event_t *e) {
+  bool allow = (bool)(intptr_t)lv_event_get_user_data(e);
+  if (!curPending[0]) return;
+  net_send_decision(curPending, allow);
+  markSent(curPending);
+  setButtonsEnabled(false);
+  lv_label_set_text(lblDecHint, allow ? "Allowed - sending..." : "Denied - sending...");
+}
+
+static lv_obj_t *button(lv_obj_t *parent, const char *txt, lv_color_t bg, int x, bool allow) {
+  lv_obj_t *b = lv_btn_create(parent);
+  lv_obj_set_size(b, 150, 72);
+  lv_obj_align(b, LV_ALIGN_CENTER, x, 101);
+  lv_obj_set_style_radius(b, 36, 0);
+  lv_obj_set_style_bg_color(b, bg, 0);
+  lv_obj_set_style_shadow_width(b, 0, 0);
+  lv_obj_set_style_bg_opa(b, LV_OPA_40, LV_STATE_DISABLED);
+  lv_obj_set_style_transform_width(b, -4, LV_STATE_PRESSED);
+  lv_obj_set_style_transform_height(b, -4, LV_STATE_PRESSED);
+  lv_obj_t *l = label(b, F_M, C_TEXT);
+  lv_label_set_text(l, txt);
+  lv_obj_center(l);
+  lv_obj_add_event_cb(b, onDecision, LV_EVENT_CLICKED, (void *)(intptr_t)allow);
+  return b;
+}
+
+// ---------- build ----------
+void ui_init() {
+  lv_obj_t *scr = lv_scr_act();
+  lv_obj_set_style_bg_color(scr, C_BG, 0);
+  lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+  lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+  arc5 = ring(scr, 468, 16, C_ACCENT);
+  arcWeek = ring(scr, 428, 8, C_WEEK);
+
+  lblPct = label(scr, F_XL, C_TEXT);
+  lv_obj_align(lblPct, LV_ALIGN_TOP_MID, 0, 50);
+  lv_label_set_text(lblPct, "--");
+  lblSub = label(scr, F_S, C_MUTED);
+  lv_obj_align(lblSub, LV_ALIGN_TOP_MID, 0, 104);
+  lv_label_set_text(lblSub, "Connecting...");
+  lblWeek = label(scr, F_S, C_WEEK);
+  lv_obj_align(lblWeek, LV_ALIGN_TOP_MID, 0, 126);
+
+  list = lv_obj_create(scr);
+  lv_obj_set_size(list, 340, 210);
+  lv_obj_align(list, LV_ALIGN_TOP_MID, 0, 160);
+  lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
+  lv_obj_set_style_border_width(list, 0, 0);
+  lv_obj_set_style_pad_all(list, 0, 0);
+  lv_obj_set_style_pad_row(list, 6, 0);
+  lv_obj_set_flex_flow(list, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_scroll_dir(list, LV_DIR_VER);
+  lv_obj_set_scrollbar_mode(list, LV_SCROLLBAR_MODE_OFF);
+
+  for (int i = 0; i < MAX_SESSIONS; i++) {
+    Row &r = rows[i];
+    r.box = lv_obj_create(list);
+    lv_obj_set_size(r.box, 340, 52);
+    lv_obj_set_style_bg_color(r.box, C_CARD, 0);
+    lv_obj_set_style_border_width(r.box, 0, 0);
+    lv_obj_set_style_radius(r.box, 12, 0);
+    lv_obj_set_style_pad_all(r.box, 0, 0);
+    lv_obj_clear_flag(r.box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(r.box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(r.box, LV_OBJ_FLAG_HIDDEN);
+
+    r.dot = lv_obj_create(r.box);
+    lv_obj_set_size(r.dot, 10, 10);
+    lv_obj_set_style_radius(r.dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(r.dot, 0, 0);
+    lv_obj_align(r.dot, LV_ALIGN_LEFT_MID, 10, 0);
+
+    r.name = label(r.box, F_M, C_TEXT);
+    lv_obj_set_width(r.name, 200);
+    lv_label_set_long_mode(r.name, LV_LABEL_LONG_DOT);
+    lv_obj_align(r.name, LV_ALIGN_TOP_LEFT, 28, 6);
+
+    r.detail = label(r.box, F_S, C_MUTED);
+    lv_obj_set_width(r.detail, 300);
+    lv_label_set_long_mode(r.detail, LV_LABEL_LONG_DOT);
+    lv_obj_align(r.detail, LV_ALIGN_BOTTOM_LEFT, 28, -6);
+
+    r.badge = label(r.box, F_S, C_MUTED);
+    lv_obj_align(r.badge, LV_ALIGN_TOP_RIGHT, -12, 9);
+  }
+
+  lblEmpty = label(scr, F_S, C_MUTED);
+  lv_label_set_text(lblEmpty, "No active Claude sessions");
+  lv_obj_align(lblEmpty, LV_ALIGN_CENTER, 0, 20);
+
+  lblStatus = label(scr, F_S, C_MUTED);
+  lv_label_set_recolor(lblStatus, true);
+  lv_obj_align(lblStatus, LV_ALIGN_BOTTOM_MID, 0, -46);
+
+  // ----- decision overlay (top layer so it covers everything) -----
+  dec = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(dec, 480, 480);
+  lv_obj_center(dec);
+  lv_obj_set_style_radius(dec, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(dec, C_BG, 0);
+  lv_obj_set_style_bg_opa(dec, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(dec, C_ACCENT, 0);
+  lv_obj_set_style_border_width(dec, 5, 0);
+  lv_obj_set_style_pad_all(dec, 0, 0);
+  lv_obj_clear_flag(dec, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(dec, LV_OBJ_FLAG_HIDDEN);
+
+  lblDecTitle = label(dec, F_S, C_ACCENT);
+  lv_obj_align(lblDecTitle, LV_ALIGN_TOP_MID, 0, 54);
+  lblDecSession = label(dec, F_M, C_TEXT);
+  lv_obj_align(lblDecSession, LV_ALIGN_TOP_MID, 0, 80);
+  lblDecTool = label(dec, F_L, C_TEXT);
+  lv_obj_align(lblDecTool, LV_ALIGN_TOP_MID, 0, 108);
+
+  lv_obj_t *box = lv_obj_create(dec);
+  lv_obj_set_size(box, 340, 130);
+  lv_obj_align(box, LV_ALIGN_TOP_MID, 0, 156);
+  lv_obj_set_style_bg_color(box, C_CARD, 0);
+  lv_obj_set_style_border_width(box, 0, 0);
+  lv_obj_set_style_radius(box, 12, 0);
+  lv_obj_set_style_pad_all(box, 12, 0);
+  lv_obj_set_scrollbar_mode(box, LV_SCROLLBAR_MODE_OFF);
+  lblDecDetail = label(box, F_S, C_TEXT);
+  lv_obj_set_width(lblDecDetail, 316);
+  lv_label_set_long_mode(lblDecDetail, LV_LABEL_LONG_WRAP);
+
+  btnDeny = button(dec, "Deny", C_BTN, -82, false);
+  btnAllow = button(dec, "Allow", C_ACCENT, 82, true);
+
+  lblDecHint = label(dec, F_S, C_MUTED);
+  lv_obj_align(lblDecHint, LV_ALIGN_BOTTOM_MID, 0, -42);
+}
+
+// ---------- update ----------
+void ui_update(const DashState &s) {
+  char a[24], b[24], buf[96];
+  wifiOk = s.wifiOk;
+  linkOk = s.bridgeOk;
+
+  // usage rings
+  if (!s.wifiOk || !s.bridgeOk) {
+    lv_label_set_text(lblPct, "--");
+    lv_label_set_text(lblSub, s.wifiOk ? "Bridge offline" : "Connecting to Wi-Fi...");
+    lv_label_set_text(lblWeek, "");
+  } else if (!s.usageOk || !s.fiveHour.valid) {
+    lv_label_set_text(lblPct, "--");
+    lv_label_set_text(lblSub, s.usageErr[0] ? s.usageErr : "Usage unavailable");
+    lv_label_set_text(lblWeek, "");
+    lv_arc_set_value(arc5, 0);
+    lv_arc_set_value(arcWeek, 0);
+  } else {
+    float p = s.fiveHour.pct;
+    lv_label_set_text_fmt(lblPct, "%d%%", (int)(p + 0.5f));
+    fmtDur(s.fiveHour.resetsIn, a, sizeof(a));
+    snprintf(buf, sizeof(buf), "5-hour limit - resets %s", a);
+    lv_label_set_text(lblSub, buf);
+    lv_arc_set_value(arc5, (int)constrain(p + 0.5f, 0, 100));
+    lv_obj_set_style_arc_color(arc5, p >= 90 ? C_RED : p >= 75 ? C_AMBER : C_ACCENT, LV_PART_INDICATOR);
+    if (s.week.valid) {
+      fmtDur(s.week.resetsIn, b, sizeof(b));
+      snprintf(buf, sizeof(buf), "Week %d%% - resets %s", (int)(s.week.pct + 0.5f), b);
+      lv_label_set_text(lblWeek, buf);
+      lv_arc_set_value(arcWeek, (int)constrain(s.week.pct + 0.5f, 0, 100));
+    } else {
+      lv_label_set_text(lblWeek, "");
+    }
+  }
+
+  // sessions
+  workingCount = 0;
+  for (int i = 0; i < MAX_SESSIONS; i++) {
+    Row &r = rows[i];
+    if (i >= s.nSessions || !s.bridgeOk) { lv_obj_add_flag(r.box, LV_OBJ_FLAG_HIDDEN); continue; }
+    const SessionInfo &x = s.sessions[i];
+    if (!strcmp(x.state, "working")) workingCount++;
+    lv_obj_clear_flag(r.box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_style_bg_color(r.dot, stateColor(x.state), 0);
+    lv_label_set_text(r.name, x.name);
+    if (x.tool[0]) { snprintf(buf, sizeof(buf), "%s: %s", x.tool, x.detail); lv_label_set_text(r.detail, buf); }
+    else lv_label_set_text(r.detail, x.detail);
+    if (x.subagents) lv_label_set_text_fmt(r.badge, "+%d agent%s", x.subagents, x.subagents > 1 ? "s" : "");
+    else if (!strcmp(x.state, "decision")) lv_label_set_text(r.badge, "needs you");
+    else if (!strcmp(x.state, "waiting")) lv_label_set_text(r.badge, "waiting");
+    else if (!strcmp(x.state, "idle")) lv_label_set_text(r.badge, "idle");
+    else lv_label_set_text(r.badge, "");
+    lv_obj_set_style_text_color(r.badge, strcmp(x.state, "decision") ? C_MUTED : C_ACCENT, 0);
+  }
+  if (s.bridgeOk && s.nSessions == 0) lv_obj_clear_flag(lblEmpty, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(lblEmpty, LV_OBJ_FLAG_HIDDEN);
+
+  // decisions: show the oldest one we haven't answered yet
+  const PendingInfo *p = nullptr;
+  if (s.bridgeOk)
+    for (int i = 0; i < s.nPending; i++)
+      if (!wasSent(s.pending[i].id)) { p = &s.pending[i]; break; }
+
+  if (!p) {
+    lv_obj_add_flag(dec, LV_OBJ_FLAG_HIDDEN);
+    curPending[0] = 0;
+  } else {
+    lv_obj_clear_flag(dec, LV_OBJ_FLAG_HIDDEN);
+    if (strcmp(curPending, p->id)) {
+      strlcpy(curPending, p->id, sizeof(curPending));
+      if (s.nPending > 1) lv_label_set_text_fmt(lblDecTitle, "PERMISSION NEEDED  1/%d", s.nPending);
+      else lv_label_set_text(lblDecTitle, "PERMISSION NEEDED");
+      lv_label_set_text(lblDecSession, p->session);
+      lv_label_set_text(lblDecTool, p->tool);
+      lv_label_set_text(lblDecDetail, p->detail);
+      setButtonsEnabled(true);
+    }
+    lv_label_set_text_fmt(lblDecHint, "Terminal takes over in %ds", p->expiresIn);
+  }
+}
+
+void ui_tick() {
+  static uint32_t last = 0;
+  if (millis() - last < 1000) return;
+  last = millis();
+  char clock[8] = "--:--";
+  time_t now = time(nullptr);
+  if (now > 1700000000) { struct tm t; localtime_r(&now, &t); strftime(clock, sizeof(clock), "%H:%M", &t); }
+  const char *dotColor = linkOk ? "7FB77E" : wifiOk ? "E8B04B" : "E5544B";
+  lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "#  %s  -  %d working", dotColor, clock, workingCount);
+}
