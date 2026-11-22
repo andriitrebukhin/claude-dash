@@ -1,6 +1,10 @@
 #pragma once
 #include <Arduino.h>
 
+#ifndef DASH_VERSION
+#define DASH_VERSION "dev"   // release builds pass -DDASH_VERSION="vX.Y.Z"
+#endif
+
 #define MAX_SESSIONS 8
 #define MAX_PENDING  4
 #define MAX_QUESTIONS 4
@@ -13,6 +17,7 @@ enum DashMode : uint8_t {
   MODE_DISCOVER,   // looking for the Mac bridge (Bonjour)
   MODE_PAIR,       // showing a pairing code, waiting for approval on the Mac
   MODE_RUN,        // normal dashboard
+  MODE_UPDATE,     // downloading + installing new firmware
 };
 
 struct SessionInfo {
@@ -68,6 +73,9 @@ struct DashState {
   SessionInfo sessions[MAX_SESSIONS];
   uint8_t nPending;
   PendingInfo pending[MAX_PENDING];
+  char fwLatest[24];   // newest firmware the bridge can serve ("" = none)
+  uint32_t fwSize;
+  char fwMd5[36];
   uint32_t seq;
 };
 
@@ -76,4 +84,6 @@ void net_begin();
 bool net_snapshot(DashState &out, uint32_t &lastSeq);
 // behavior: "allow" | "deny" | "skip". answersJson: for questions, JSON like [[0],[1,2]]
 // (chosen option indexes per question).
+// Ask the net task to download and install the firmware the bridge offers.
+void net_start_update();
 void net_send_decision(const char *id, const char *behavior, const char *answersJson = nullptr);

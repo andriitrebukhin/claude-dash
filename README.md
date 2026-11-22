@@ -65,13 +65,15 @@ Download `claude-dash-<version>-full.bin` from the [latest release](https://gith
 
 There's nothing to configure; the same image works for everyone.
 
-**To update a display that's already set up,** flash `claude-dash-<version>-app.bin` at `0x10000` instead. That keeps its Wi-Fi and pairing. The full image starts fresh.
+**Updates are wireless.** When a new release is out, the display shows an **Update to vX** button. Tap it, confirm, and it installs over Wi-Fi in about a minute, keeping its Wi-Fi and pairing. The Mac bridge checks GitHub releases every 6 hours and downloads the new firmware. It checks the file against the release's SHA-256 checksums, and the display checks it again (MD5) before installing. To update over USB instead, flash `claude-dash-<version>-update.bin` at `0xe000`; that also keeps Wi-Fi and pairing. The full image starts fresh.
+
+**The board has two USB-C ports.** Use the one labelled **USB** for USB setup from the Mac (option A below); the **UART** port works for flashing only.
 
 You can also build the firmware yourself; see [Building the firmware](#building-the-firmware).
 
 ### 3. Display: first boot
 
-**Option A: plug it into your Mac with USB (easiest).** The bridge notices the display on the cable. It shares your Mac's Wi-Fi (macOS asks once for your password, to read the saved Wi-Fi password) and pairs it. There's no typing and no code. It picks the first of the Mac's saved networks that the display can see, so 5 GHz-only networks are skipped automatically.
+**Option A: plug it into your Mac with USB (easiest).** Use the board's **USB** port, not UART. The bridge notices the display on the cable. It shares your Mac's Wi-Fi (macOS asks once for your password, to read the saved Wi-Fi password) and pairs it. There's no typing and no code. It picks the first of the Mac's saved networks that the display can see, so 5 GHz-only networks are skipped automatically.
 
 **Option B: phone + QR code.**
 1. **Wi-Fi.** The display shows a QR code. Scan it, or join **"Claude Dash Setup"** on your phone. A setup page opens; pick your Wi-Fi (2.4 GHz) and enter the password.
@@ -135,7 +137,8 @@ firmware/ClaudeDash/
 - **Raising `decision_timeout`:** if you set it above ~55 s, also raise the `PermissionRequest` timeout in `hooks/hooks.json`.
 - **Demo mode:** `python3 bridge/bridge.py --demo` generates fake sessions and permission requests for testing the display.
 - **Discovery:** the bridge advertises `_claude-dash._tcp` over Bonjour and also answers UDP broadcasts on port 8788. On networks with client isolation, such as guest or office Wi-Fi, neither works; set `BRIDGE_HOST_OVERRIDE` in `config.h`.
-- **USB setup:** to turn it off, set `"usb_setup": false` in `~/.claude-dash/config.json`. Over the cable, the bridge sends `DASH?` and gets back `DASH HELLO {...}`; `DASH DIAG` prints the display's network diagnostics.
+- **Wireless updates:** set `"update_repo": ""` in `~/.claude-dash/config.json` to turn off the release check, or point it at your fork. Downloaded images are kept in `~/.claude-dash/firmware/`.
+- **USB setup:** the bridge only talks to the ESP32's own USB port (vendor ID `0x303a`). It never opens UART adapters, so it can't reset a board or interfere with flashing. To turn it off, set `"usb_setup": false` in `~/.claude-dash/config.json`. Over the cable, the bridge sends `DASH?` and gets back `DASH HELLO {...}`; `DASH DIAG` prints the display's network diagnostics.
 
 ## Development
 

@@ -22,6 +22,7 @@ finds it without knowing the Mac's IP.
 """
 import argparse
 import glob
+import hashlib
 import select
 import termios
 import atexit
@@ -69,6 +70,7 @@ def load_conf():
         "bridge_id": secrets.token_hex(4),
         "devices": {},            # paired displays: name -> token
         "usb_setup": True,        # give a plugged-in display your Wi-Fi + pairing over USB
+        "update_repo": "andriitrebukhin/claude-dash",   # GitHub repo whose releases the display updates from ("" = off)
     }
     changed = False
     for k, v in defaults.items():
@@ -209,6 +211,8 @@ class Dash:
         self.usage = {"ok": False, "error": "fetching..."}
         self.usage_at = 0
         self.pairings = {}   # req id -> {device, code, created, status, token}
+        self.displays = {}       # device name -> {"fw", "ip", "seen"} from their /state polls
+        self.firmware = None     # {"latest", "size", "md5", "path"} once a release is downloaded + verified
         self.usb_wifi_skip = {}  # device -> time before which we won't ask for the Wi-Fi password again
 
     # ---------- pairing ----------
@@ -417,7 +421,9 @@ class Dash:
                 w = usage.get(k)
                 if isinstance(w, dict) and w.get("resets_at"):
                     usage[k] = dict(w, resets_in=max(0, int(w["resets_at"] - now)))
-        return {"ts": int(now), "clock": time.strftime("%H:%M"), "usage": usage, "sessions": sessions[:8], "pending": pending[:4]}
+        fw = self.firmware
+        extra = {"firmware": {k: fw[k] for k in ("latest", "size", "md5")}} if fw else {}
+        return {**extra, "ts": int(now), "clock": time.strftime("%H:%M"), "usage": usage, "sessions": sessions[:8], "pending": pending[:4]}
 
 
 # ---------------- USB setup ----------------
@@ -490,15 +496,16 @@ def notify(title, msg):
 
 
 def usb_setup_once(dash, path):
-    """Returns True if the port is a Claude Dash display we handled (or that needs nothing)."""
+    """Set up a display on `path`. Returns True if it should be checked again later
+    (it still needs Wi-Fi), False if it's done or isn't a Claude Dash display."""
     try:
         fd = serial_open(path)
     except OSError:
-        return False   # busy (serial monitor / upload) or gone
+        return True    # busy (serial monitor / flashing) or gone: try again later
     try:
         hello = serial_ask(fd, "DASH?", "DASH HELLO", 2.0)
         if not hello:
-            return False
+            return False   # not a Claude Dash display
         info = json.loads(hello)
         device = clip(ascii_only(str(info.get("device") or "display")), 32)
         setup = {}
@@ -528,26 +535,102 @@ def usb_setup_once(dash, path):
             print(f"USB: sent {what} to {device}: {'ok' if ok else 'no answer'}", flush=True)
             if ok and "token" in setup:
                 notify("Claude Dash", f"Paired with {device} over USB")
-        return True
+            return "ssid" not in setup and info.get("mode") == MODE_PORTAL
+        return info.get("mode") == MODE_PORTAL
     except Exception as e:  # noqa: BLE001
         print(f"USB: {path}: {e}", flush=True)
-        return False
+        return True
     finally:
         os.close(fd)
 
 
+ESPRESSIF_VID = 0x303A   # ESP32-S3 built-in USB (the board's "USB" port)
+
+
+def espressif_ports():
+    """Serial ports that belong to an ESP32's own USB. UART adapters (CH343 etc.) are
+    skipped: opening those can reset the board, and they'd collide with flashing."""
+    try:
+        out = subprocess.run(["ioreg", "-r", "-c", "IOUSBHostDevice", "-l", "-w0"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return set()
+    ports, vid = set(), None
+    for line in out.splitlines():
+        if '"idVendor" = ' in line:
+            try:
+                vid = int(line.split("=")[1].strip())
+            except ValueError:
+                vid = None
+        elif '"IOCalloutDevice" = ' in line and vid == ESPRESSIF_VID:
+            ports.add(line.split("=")[1].strip().strip('"'))
+    return ports
+
+
 def usb_loop(dash):
-    """Watch for a display plugged into this Mac and set it up over the cable."""
-    checked = {}   # port -> time of last check
+    """Watch for a display plugged into this Mac's USB and set it up over the cable.
+    Each port is checked once when it appears, and again every minute only while
+    that display still needs Wi-Fi."""
+    state = {}   # port -> {"at": last check, "again": re-check?}
     while True:
-        ports = set(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/cu.wchusbserial*"))
-        for gone in set(checked) - ports:
-            del checked[gone]
+        ports = espressif_ports()
+        for gone in set(state) - ports:
+            del state[gone]
         for p in ports:
-            if time.time() - checked.get(p, 0) > 60:   # new device, or re-check a minute later
-                checked[p] = time.time()
-                usb_setup_once(dash, p)
+            st = state.get(p)
+            if st is None or (st["again"] and time.time() - st["at"] > 60):
+                needs_more = usb_setup_once(dash, p)
+                state[p] = {"at": time.time(), "again": needs_more}
         time.sleep(3)
+
+
+# ---------------- firmware updates ----------------
+def http_get(url, timeout=60):
+    req = urllib.request.Request(url, headers={"User-Agent": "claude-dash-bridge", "Accept": "application/octet-stream, application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def check_firmware(dash):
+    """Download the latest release's app image (verified against SHA256SUMS) for the display."""
+    repo = dash.conf.get("update_repo")
+    if not repo:
+        return
+    rel = json.loads(http_get(f"https://api.github.com/repos/{repo}/releases/latest", 20))
+    tag = rel.get("tag_name", "")
+    assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
+    name = f"claude-dash-{tag}-app.bin"
+    if name not in assets or "SHA256SUMS" not in assets:
+        return
+    fwdir = CONF_DIR / "firmware"
+    fwdir.mkdir(exist_ok=True)
+    path = fwdir / name
+    if not path.exists():
+        sums = http_get(assets["SHA256SUMS"], 20).decode()
+        expected = next((ln.split()[0] for ln in sums.splitlines() if ln.strip().endswith(name)), None)
+        data = http_get(assets[name], 300)
+        if not expected or hashlib.sha256(data).hexdigest() != expected:
+            print(f"Firmware {tag}: checksum mismatch, ignoring", flush=True)
+            return
+        tmp = path.with_suffix(".tmp")
+        tmp.write_bytes(data)
+        tmp.replace(path)
+        print(f"Firmware {tag} downloaded and verified", flush=True)
+        for old in fwdir.glob("claude-dash-*-app.bin"):
+            if old != path:
+                old.unlink()
+    data = path.read_bytes()
+    with dash.lock:
+        dash.firmware = {"latest": tag, "size": len(data), "md5": hashlib.md5(data).hexdigest(), "path": str(path)}
+
+
+def firmware_loop(dash):
+    while True:
+        try:
+            check_firmware(dash)
+        except Exception as e:  # noqa: BLE001
+            print(f"Firmware check failed: {clip(str(e), 80)}", flush=True)
+        time.sleep(6 * 3600)
 
 
 # ---------------- usage fetching ----------------
@@ -676,12 +759,34 @@ def make_handler(dash):
             if u.path == "/state":
                 if not self._authed():
                     return self._send(401, {"error": "bad token"})
+                dev = self.headers.get("X-Device")
+                if dev:
+                    dash.displays[clip(ascii_only(dev), 32)] = {
+                        "fw": clip(ascii_only(self.headers.get("X-Fw", "")), 24),
+                        "ip": self.client_address[0], "seen": int(time.time())}
                 snap = dash.snapshot()
                 if parse_qs(u.query).get("ascii"):
                     snap = asciify(snap)
                 return self._send(200, snap)
+            if u.path == "/firmware/app.bin":
+                if not self._authed():
+                    return self._send(401, {"error": "bad token"})
+                fw = dash.firmware
+                if not fw:
+                    return self._send(404, {"error": "no firmware"})
+                data = Path(fw["path"]).read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                for i in range(0, len(data), 16384):
+                    self.wfile.write(data[i:i + 16384])
+                return
             if u.path == "/pair/status":
                 return self._send(200, dash.pair_status(parse_qs(u.query).get("req", [""])[0]))
+            if u.path == "/displays" and self._local():
+                now = int(time.time())
+                return self._send(200, {k: dict(v, ago=now - v["seen"]) for k, v in dash.displays.items()})
             if u.path == "/pairings" and self._local():
                 return self._send(200, dash.pending_pairings())
             if u.path == "/" and self._local():
@@ -816,6 +921,8 @@ def main():
     srv.daemon_threads = True
     advertise(conf)
     threading.Thread(target=udp_discovery_loop, args=(conf,), daemon=True).start()
+    if not args.demo:
+        threading.Thread(target=firmware_loop, args=(dash,), daemon=True).start()
     if conf.get("usb_setup") and sys.platform == "darwin":
         threading.Thread(target=usb_loop, args=(dash,), daemon=True).start()
     print(f"Claude Dash bridge on http://{lan_ip()}:{conf['port']} (Bonjour: _claude-dash._tcp)", flush=True)

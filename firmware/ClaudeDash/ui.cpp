@@ -297,6 +297,92 @@ static void buildQuestionOverlay() {
   lv_obj_align(btnDone, LV_ALIGN_BOTTOM_MID, 62, -46);
 }
 
+// ---------- firmware update offer ----------
+static lv_obj_t *btnUpdatePill, *lblUpdatePill, *updCard, *lblUpdVer, *lblUpdSub;
+static char offeredVer[24] = "";
+static char dismissedVer[24] = "";
+
+// "v1.2.3-test" -> 1002003 (suffix ignored); anything unparseable -> 0
+static long versionNum(const char *v) {
+  if (*v == 'v' || *v == 'V') v++;
+  int a = 0, b = 0, c = 0;
+  if (sscanf(v, "%d.%d.%d", &a, &b, &c) < 2) return 0;
+  return a * 1000000L + b * 1000L + c;
+}
+
+static void onUpdatePill(lv_event_t *) {
+  lv_label_set_text(lblUpdVer, offeredVer);
+  lv_label_set_text(lblUpdSub, "Installed: " DASH_VERSION "\nTakes about a minute; the display restarts.");
+  lv_obj_clear_flag(updCard, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void onUpdateLater(lv_event_t *) {
+  strlcpy(dismissedVer, offeredVer, sizeof(dismissedVer));
+  lv_obj_add_flag(updCard, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(btnUpdatePill, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void onUpdateNow(lv_event_t *) {
+  lv_obj_add_flag(updCard, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(btnUpdatePill, LV_OBJ_FLAG_HIDDEN);
+  net_start_update();
+}
+
+static void buildUpdateUi(lv_obj_t *scr) {
+  btnUpdatePill = lv_btn_create(scr);
+  lv_obj_set_size(btnUpdatePill, 190, 30);
+  lv_obj_align(btnUpdatePill, LV_ALIGN_BOTTOM_MID, 0, -74);
+  lv_obj_set_style_radius(btnUpdatePill, 15, 0);
+  lv_obj_set_style_bg_color(btnUpdatePill, C_CARD, 0);
+  lv_obj_set_style_border_color(btnUpdatePill, C_ACCENT, 0);
+  lv_obj_set_style_border_width(btnUpdatePill, 1, 0);
+  lv_obj_set_style_shadow_width(btnUpdatePill, 0, 0);
+  lblUpdatePill = label(btnUpdatePill, F_S, C_ACCENT);
+  lv_obj_center(lblUpdatePill);
+  lv_obj_add_event_cb(btnUpdatePill, onUpdatePill, LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_flag(btnUpdatePill, LV_OBJ_FLAG_HIDDEN);
+
+  updCard = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(updCard, 480, 480);
+  lv_obj_center(updCard);
+  lv_obj_set_style_radius(updCard, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(updCard, C_BG, 0);
+  lv_obj_set_style_bg_opa(updCard, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_color(updCard, C_ACCENT, 0);
+  lv_obj_set_style_border_width(updCard, 5, 0);
+  lv_obj_set_style_pad_all(updCard, 0, 0);
+  lv_obj_clear_flag(updCard, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_flag(updCard, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_t *t = label(updCard, F_S, C_ACCENT);
+  lv_label_set_text(t, "FIRMWARE UPDATE");
+  lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 90);
+  lblUpdVer = label(updCard, F_XL, C_TEXT);
+  lv_obj_align(lblUpdVer, LV_ALIGN_TOP_MID, 0, 130);
+  lblUpdSub = label(updCard, F_S, C_MUTED);
+  lv_obj_set_width(lblUpdSub, 300);
+  lv_obj_set_style_text_align(lblUpdSub, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_long_mode(lblUpdSub, LV_LABEL_LONG_WRAP);
+  lv_obj_align(lblUpdSub, LV_ALIGN_TOP_MID, 0, 200);
+
+  lv_obj_t *later = lv_btn_create(updCard);
+  lv_obj_t *now = lv_btn_create(updCard);
+  lv_obj_t *bs[2] = {later, now};
+  const char *txt[2] = {"Later", "Update"};
+  for (int i = 0; i < 2; i++) {
+    lv_obj_set_size(bs[i], 150, 72);
+    lv_obj_align(bs[i], LV_ALIGN_CENTER, i ? 82 : -82, 101);
+    lv_obj_set_style_radius(bs[i], 36, 0);
+    lv_obj_set_style_bg_color(bs[i], i ? C_ACCENT : C_BTN, 0);
+    lv_obj_set_style_shadow_width(bs[i], 0, 0);
+    lv_obj_t *l = label(bs[i], F_M, C_TEXT);
+    lv_label_set_text(l, txt[i]);
+    lv_obj_center(l);
+  }
+  lv_obj_add_event_cb(later, onUpdateLater, LV_EVENT_CLICKED, nullptr);
+  lv_obj_add_event_cb(now, onUpdateNow, LV_EVENT_CLICKED, nullptr);
+}
+
 // ---------- build ----------
 void ui_init() {
   lv_obj_t *scr = lv_scr_act();
@@ -366,6 +452,8 @@ void ui_init() {
   lblStatus = label(scr, F_S, C_MUTED);
   lv_label_set_recolor(lblStatus, true);
   lv_obj_align(lblStatus, LV_ALIGN_BOTTOM_MID, 0, -46);
+
+  buildUpdateUi(scr);
 
   // ----- setup overlay: Wi-Fi setup, discovery, pairing -----
   setupScr = lv_obj_create(lv_layer_top());
@@ -457,7 +545,8 @@ void ui_update(const DashState &s) {
     lv_label_set_text(lblSetupTitle, s.setup.title);
     lv_label_set_text(lblSetupBig, s.setup.big);
     lv_label_set_text(lblSetupSub, s.setup.sub);
-    lv_label_set_text(lblSetupHint, s.mode == MODE_PAIR || s.mode == MODE_PORTAL ? "" : "Hold BOOT 5 s to reset");
+    lv_label_set_text(lblSetupHint, (s.mode == MODE_PAIR || s.mode == MODE_PORTAL || s.mode == MODE_UPDATE) ? "" : "Hold BOOT 5 s to reset");
+    lv_obj_add_flag(updCard, LV_OBJ_FLAG_HIDDEN);
 #if LV_USE_QRCODE
     if (s.setup.qr[0]) {
       if (strcmp(lastQr, s.setup.qr)) {
@@ -472,6 +561,17 @@ void ui_update(const DashState &s) {
     return;
   }
   lv_obj_add_flag(setupScr, LV_OBJ_FLAG_HIDDEN);
+
+  // firmware update offer: only for a newer release than what's running
+  if (s.bridgeOk && s.fwLatest[0] && versionNum(s.fwLatest) > versionNum(DASH_VERSION) && strcmp(s.fwLatest, dismissedVer)) {
+    if (strcmp(offeredVer, s.fwLatest)) {
+      strlcpy(offeredVer, s.fwLatest, sizeof(offeredVer));
+      lv_label_set_text_fmt(lblUpdatePill, LV_SYMBOL_DOWNLOAD "  Update to %s", offeredVer);
+    }
+    lv_obj_clear_flag(btnUpdatePill, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(btnUpdatePill, LV_OBJ_FLAG_HIDDEN);
+  }
 
   // usage rings
   if (!s.wifiOk || !s.bridgeOk) {

@@ -3,8 +3,10 @@
 #
 # Fetches Waveshare's demo package (display/touch drivers + LVGL 8.3), applies
 # the LVGL settings Claude Dash needs, compiles, and writes to dist/:
-#   claude-dash-<version>-full.bin   flash at 0x0     (first install; erases Wi-Fi/pairing)
-#   claude-dash-<version>-app.bin    flash at 0x10000 (update; keeps Wi-Fi/pairing)
+#   claude-dash-<version>-full.bin    flash at 0x0    (first install; erases Wi-Fi/pairing)
+#   claude-dash-<version>-update.bin  flash at 0xe000 (USB update; keeps Wi-Fi/pairing,
+#                                      resets the boot slot so it works after wireless updates)
+#   claude-dash-<version>-app.bin     app image the Mac bridge serves for wireless updates
 #   SHA256SUMS
 #
 # Needs: arduino-cli, curl, unzip. Usage: VERSION=v1.2.3 scripts/build-firmware.sh
@@ -70,6 +72,11 @@ rm -f "$DIST"/claude-dash-*.bin "$DIST/SHA256SUMS"
   --flash-mode keep --flash-freq keep --flash-size keep \
   0x0 "$OUT/ClaudeDash.ino.bootloader.bin" \
   0x8000 "$OUT/ClaudeDash.ino.partitions.bin" \
+  0xe000 "$BOOT_APP0" \
+  0x10000 "$OUT/ClaudeDash.ino.bin" >/dev/null
+UPDATE="$DIST/claude-dash-$VERSION-update.bin"
+"$ESPTOOL" --chip esp32s3 merge-bin -o "$UPDATE" --target-offset 0xe000 \
+  --flash-mode keep --flash-freq keep --flash-size keep \
   0xe000 "$BOOT_APP0" \
   0x10000 "$OUT/ClaudeDash.ino.bin" >/dev/null
 cp "$OUT/ClaudeDash.ino.bin" "$APP"

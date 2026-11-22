@@ -12,14 +12,11 @@
 #include <DNSServer.h>
 #include <Preferences.h>
 #include <WiFiUdp.h>
+#include <Update.h>
 #include <ArduinoJson.h>   // v7
 #include <esp_mac.h>
 #include "config.h"
 #include "dash_state.h"
-
-#ifndef DASH_VERSION
-#define DASH_VERSION "dev"
-#endif
 
 struct Decision { char id[24]; char behavior[8]; char answers[96]; };
 
@@ -34,6 +31,7 @@ static String g_base;                 // "http://ip:port" of the bridge
 static String g_deviceName;
 static String g_visibleSsids = "[]";   // JSON array from the last Wi-Fi scan (for USB setup)
 static volatile bool g_usbSaved = false;
+static volatile bool g_updateRequested = false;
 static uint8_t g_mode = MODE_BOOT;
 
 static void cp(char *dst, size_t n, const char *src) { strlcpy(dst, src ? src : "", n); }
@@ -338,6 +336,8 @@ static int httpGet(const String &path, String &body, bool auth) {
   http.setTimeout(3000);
   http.begin(g_base + path);
   if (auth) http.addHeader("X-Token", g_token);
+  http.addHeader("X-Device", g_deviceName);
+  http.addHeader("X-Fw", DASH_VERSION);
   int code = http.GET();
   if (code > 0) body = http.getString();
   http.end();
@@ -411,6 +411,9 @@ static bool parseState(const String &body, DashState &st) {
   if (deserializeJson(doc, body)) return false;
   memset(&st, 0, sizeof(st));
   cp(st.clock, sizeof(st.clock), doc["clock"] | "");
+  cp(st.fwLatest, sizeof(st.fwLatest), doc["firmware"]["latest"] | "");
+  st.fwSize = doc["firmware"]["size"] | 0;
+  cp(st.fwMd5, sizeof(st.fwMd5), doc["firmware"]["md5"] | "");
 
   JsonVariantConst u = doc["usage"];
   st.usageOk = u["ok"] | false;
@@ -451,12 +454,79 @@ static bool parseState(const String &body, DashState &st) {
 }
 
 static void postDecision(const Decision &d) {
+  if (!strcmp(d.behavior, "noop")) return;
   String body;
   String json = String("{\"id\":\"") + d.id + "\",\"behavior\":\"" + d.behavior + "\"";
   if (d.answers[0]) json += String(",\"answers\":") + d.answers;
   json += "}";
   int code = httpPost("/decision", json, body, true);
   Serial.printf("[net] decision %s %s %s -> %d\n", d.id, d.behavior, d.answers, code);
+}
+
+// ---------------------------------------------------------------- wireless update
+static void updateFailed(const char *why) {
+  Serial.printf("[ota] failed: %s\n", why);
+  setMode(MODE_UPDATE, "UPDATE FAILED", "", why);
+  waitMs(5000);
+}
+
+static void doUpdate() {
+  char ver[24], md5[36];
+  uint32_t size;
+  xSemaphoreTake(g_mtx, portMAX_DELAY);
+  cp(ver, sizeof(ver), g_state.fwLatest);
+  cp(md5, sizeof(md5), g_state.fwMd5);
+  size = g_state.fwSize;
+  xSemaphoreGive(g_mtx);
+  if (!ver[0] || !size) return;
+
+  char sub[96];
+  snprintf(sub, sizeof(sub), "Installing %s. Keep the display powered.", ver);
+  setMode(MODE_UPDATE, "UPDATING", "0%", sub);
+  Serial.printf("[ota] %s -> %s (%u bytes)\n", DASH_VERSION, ver, (unsigned)size);
+
+  HTTPClient http;
+  http.setTimeout(15000);
+  http.begin(g_base + "/firmware/app.bin");
+  http.addHeader("X-Token", g_token);
+  int code = http.GET();
+  if (code != 200) { http.end(); updateFailed("Couldn't download the firmware from the Mac."); return; }
+  int len = http.getSize();
+  if (len != (int)size) { http.end(); updateFailed("Firmware size mismatch."); return; }
+  if (!Update.begin(len)) { http.end(); updateFailed("Not enough space for the update."); return; }
+  if (md5[0]) Update.setMD5(md5);
+
+  WiFiClient *stream = http.getStreamPtr();
+  static uint8_t buf[4096];
+  int written = 0, lastPct = -1;
+  uint32_t lastData = millis();
+  while (written < len) {
+    size_t avail = stream->available();
+    if (!avail) {
+      if (millis() - lastData > 15000) break;
+      vTaskDelay(pdMS_TO_TICKS(2));
+      continue;
+    }
+    int r = stream->readBytes(buf, avail < sizeof(buf) ? avail : sizeof(buf));
+    if (r <= 0) continue;
+    if (Update.write(buf, r) != (size_t)r) break;
+    written += r;
+    lastData = millis();
+    int pct = (int)((int64_t)written * 100 / len);
+    if (pct != lastPct && pct % 2 == 0) {
+      char big[8];
+      snprintf(big, sizeof(big), "%d%%", pct);
+      setMode(MODE_UPDATE, "UPDATING", big, sub);
+      lastPct = pct;
+    }
+  }
+  http.end();
+  if (written != len) { Update.abort(); updateFailed("Download interrupted."); return; }
+  if (!Update.end(true)) { updateFailed(Update.getError() == UPDATE_ERROR_MD5 ? "Checksum mismatch." : Update.errorString()); return; }
+  setMode(MODE_UPDATE, "UPDATED", ver, "Restarting...");
+  Serial.printf("[ota] done, restarting into %s\n", ver);
+  delay(1500);
+  ESP.restart();
 }
 
 enum RunExit { EXIT_UNAUTHORIZED, EXIT_LOST };
@@ -466,6 +536,7 @@ static RunExit runLoop() {
   for (;;) {
     checkResetButton();
     checkSerial();
+    if (g_updateRequested) { g_updateRequested = false; doUpdate(); }
     Decision d;
     while (xQueueReceive(g_decQ, &d, 0) == pdTRUE) postDecision(d);
 
@@ -539,6 +610,13 @@ bool net_snapshot(DashState &out, uint32_t &lastSeq) {
   }
   xSemaphoreGive(g_mtx);
   return changed;
+}
+
+void net_start_update() {
+  g_updateRequested = true;
+  Decision wake = {};   // wake the poll loop right away
+  cp(wake.behavior, sizeof(wake.behavior), "noop");
+  xQueueSend(g_decQ, &wake, 0);
 }
 
 void net_send_decision(const char *id, const char *behavior, const char *answersJson) {

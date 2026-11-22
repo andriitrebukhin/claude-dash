@@ -52,7 +52,9 @@ jobs:
 
             **Or with esptool:** `esptool --chip esp32s3 write-flash 0x0 claude-dash-${{ github.ref_name }}-full.bin`
 
-            **Updating a display that's already set up?** Flash `claude-dash-${{ github.ref_name }}-app.bin` at `0x10000` instead. That keeps its Wi-Fi and pairing; the full image erases them.
+            **Updating a display that's already set up?** It updates itself: within a few hours the display shows an **Update to ${{ github.ref_name }}** button (the Mac bridge fetches the release). To update over USB instead, flash `claude-dash-${{ github.ref_name }}-update.bin` at `0xe000`; that keeps Wi-Fi and pairing. The full image erases them.
+
+            `claude-dash-${{ github.ref_name }}-app.bin` is the image the bridge serves for wireless updates.
 
             Then install the Mac plugin and set up the display as described in the [README](https://github.com/andriitrebukhin/claude-dash#install).
 
