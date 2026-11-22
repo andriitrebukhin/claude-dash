@@ -11,6 +11,7 @@
 #include <WebServer.h>
 #include <DNSServer.h>
 #include <Preferences.h>
+#include <WiFiUdp.h>
 #include <ArduinoJson.h>   // v7
 #include <esp_mac.h>
 #include "config.h"
@@ -27,6 +28,9 @@ static Preferences prefs;
 static String g_ssid, g_pass, g_token, g_bridgeId;
 static String g_base;                 // "http://ip:port" of the bridge
 static String g_deviceName;
+static String g_visibleSsids = "[]";   // JSON array from the last Wi-Fi scan (for USB setup)
+static volatile bool g_usbSaved = false;
+static uint8_t g_mode = MODE_BOOT;
 
 static void cp(char *dst, size_t n, const char *src) { strlcpy(dst, src ? src : "", n); }
 
@@ -34,6 +38,7 @@ static void cp(char *dst, size_t n, const char *src) { strlcpy(dst, src ? src : 
 static void setMode(uint8_t mode, const char *title, const char *big, const char *sub, const char *qr = "") {
   xSemaphoreTake(g_mtx, portMAX_DELAY);
   g_state.mode = mode;
+  g_mode = mode;
   cp(g_state.setup.title, sizeof(g_state.setup.title), title);
   cp(g_state.setup.big, sizeof(g_state.setup.big), big);
   cp(g_state.setup.sub, sizeof(g_state.setup.sub), sub);
@@ -77,9 +82,75 @@ static void checkResetButton() {
   }
 }
 
+static bool discoverUdp();
+
+// ---------------------------------------------------------------- USB setup
+// Line protocol over the USB cable, used by the Mac bridge:
+//   Mac:     DASH?
+//   display: DASH HELLO {"device":..,"mode":..,"paired":..,"bid":..,"ssids":[..]}
+//   Mac:     DASH SETUP {"ssid":..,"pass":..,"token":..,"bid":..}   (all optional)
+//   display: DASH OK   (restarts if Wi-Fi changed)
+static void handleSerialLine(const String &line) {
+  if (line == "DASH?") {
+    JsonDocument d;
+    d["device"] = g_deviceName;
+    d["mode"] = g_mode;
+    d["paired"] = g_token.length() > 0;
+    d["bid"] = g_bridgeId;
+    d["bridge"] = g_base;
+    d["ip"] = WiFi.localIP().toString();
+    d["ssids"] = serialized(g_visibleSsids);
+    String out;
+    serializeJson(d, out);
+    Serial.println("DASH HELLO " + out);
+    return;
+  }
+  if (line == "DASH DIAG") {
+    Serial.printf("DASH DIAG ip=%s wifi=%d base=%s\n", WiFi.localIP().toString().c_str(), WiFi.status(), g_base.c_str());
+    int n = MDNS.queryService("claude-dash", "tcp");
+    Serial.printf("DASH DIAG mdns n=%d\n", n);
+    for (int i = 0; i < n; i++)
+      Serial.printf("DASH DIAG mdns %d host=%s ip=%s port=%u id=%s\n", i, MDNS.hostname(i).c_str(),
+                    MDNS.address(i).toString().c_str(), MDNS.port(i), MDNS.txt(i, "id").c_str());
+    Serial.printf("DASH DIAG udp=%d base=%s\n", discoverUdp(), g_base.c_str());
+    return;
+  }
+  if (line.startsWith("DASH SETUP ")) {
+    JsonDocument d;
+    if (deserializeJson(d, line.substring(11))) { Serial.println("DASH ERR bad json"); return; }
+    String ssid = d["ssid"] | "", pass = d["pass"] | "", token = d["token"] | "", bid = d["bid"] | "";
+    prefs.begin("dash", false);
+    if (ssid.length()) { prefs.putString("ssid", ssid); prefs.putString("pass", pass); }
+    if (token.length()) { prefs.putString("token", token); prefs.putString("bid", bid); }
+    prefs.end();
+    if (token.length()) { g_token = token; g_bridgeId = bid; }
+    Serial.println("DASH OK");
+    Serial.flush();
+    if (ssid.length()) {
+      g_usbSaved = true;
+      setMode(MODE_BOOT, "WI-FI RECEIVED", "", "Got your Wi-Fi from the Mac. Restarting...");
+    }
+    return;
+  }
+}
+
+static void checkSerial() {
+  static String line;
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (line.length()) handleSerialLine(line);
+      line = "";
+    } else if (line.length() < 600) {
+      line += c;
+    }
+  }
+  if (g_usbSaved) { delay(1200); ESP.restart(); }
+}
+
 static void waitMs(uint32_t ms) {
   uint32_t t0 = millis();
-  while (millis() - t0 < ms) { checkResetButton(); vTaskDelay(pdMS_TO_TICKS(50)); }
+  while (millis() - t0 < ms) { checkResetButton(); checkSerial(); vTaskDelay(pdMS_TO_TICKS(50)); }
 }
 
 // ---------------------------------------------------------------- Wi-Fi setup portal
@@ -97,12 +168,17 @@ static void runPortal(const char *why) {
   int n = WiFi.scanNetworks();
   String opts;
   int shown = 0;
+  JsonDocument seen;
+  JsonArray seenArr = seen.to<JsonArray>();
   for (int i = 0; i < n && shown < 15; i++) {
     String s = WiFi.SSID(i);
     if (!s.length() || opts.indexOf(">" + htmlEscape(s) + "<") >= 0) continue;
     opts += "<button type=button onclick=\"f.s.value=this.textContent;f.p.focus()\">" + htmlEscape(s) + "</button>";
+    seenArr.add(s);
     shown++;
   }
+  g_visibleSsids = "";
+  serializeJson(seen, g_visibleSsids);
   WiFi.scanDelete();
   WiFi.softAP(SETUP_AP_NAME);
   IPAddress apIp = WiFi.softAPIP();
@@ -142,7 +218,7 @@ static void runPortal(const char *why) {
   server.begin();
 
   char sub[120];
-  snprintf(sub, sizeof(sub), "%sJoin \"%s\" on your phone and pick your Wi-Fi", why, SETUP_AP_NAME);
+  snprintf(sub, sizeof(sub), "%sJoin \"%s\" on your phone, or plug me into your Mac", why, SETUP_AP_NAME);
   char qr[96];
   snprintf(qr, sizeof(qr), "WIFI:T:nopass;S:%s;;", SETUP_AP_NAME);
   setMode(MODE_PORTAL, "SET UP WI-FI", "", sub, qr);
@@ -152,6 +228,7 @@ static void runPortal(const char *why) {
     dns.processNextRequest();
     server.handleClient();
     checkResetButton();
+    checkSerial();
     if (saved && !savedAt) savedAt = millis();
     if (savedAt && millis() - savedAt > 1500) ESP.restart();
     // saved network came back (e.g. router rebooted)? go back to normal
@@ -185,13 +262,47 @@ static void connectWifi() {
 }
 
 // ---------------------------------------------------------------- discovery
+#define DISCOVERY_UDP_PORT 8788
+
+// Fallback for networks where Bonjour queries don't get answered:
+// broadcast "CLAUDE-DASH?" and the bridge replies "CLAUDE-DASH <port> <bridge_id>".
+static bool discoverUdp() {
+  WiFiUDP udp;
+  if (!udp.begin(DISCOVERY_UDP_PORT + 1)) return false;
+  bool found = false;
+  for (int attempt = 0; attempt < 2 && !found; attempt++) {
+    udp.beginPacket(WiFi.broadcastIP(), DISCOVERY_UDP_PORT);
+    udp.print("CLAUDE-DASH?");
+    udp.endPacket();
+    uint32_t t0 = millis();
+    String best;
+    while (millis() - t0 < 1200) {
+      if (udp.parsePacket()) {
+        char buf[96];
+        int len = udp.read(buf, sizeof(buf) - 1);
+        buf[len > 0 ? len : 0] = 0;
+        int port; char bid[24] = "";
+        if (sscanf(buf, "CLAUDE-DASH %d %23s", &port, bid) >= 1) {
+          String base = "http://" + udp.remoteIP().toString() + ":" + String(port);
+          if (!found || (g_bridgeId.length() && g_bridgeId == bid)) { g_base = base; found = true; }
+          if (g_bridgeId == bid) break;
+        }
+      }
+      vTaskDelay(pdMS_TO_TICKS(20));
+    }
+  }
+  udp.stop();
+  if (found) Serial.printf("[net] found bridge %s (broadcast)\n", g_base.c_str());
+  return found;
+}
+
 static bool discover() {
 #ifdef BRIDGE_HOST_OVERRIDE
   g_base = String("http://") + BRIDGE_HOST_OVERRIDE;
   return true;
 #endif
   int n = MDNS.queryService("claude-dash", "tcp");
-  if (n <= 0) return false;
+  if (n <= 0) return discoverUdp();
   int pick = 0;
   for (int i = 0; i < n; i++)
     if (g_bridgeId.length() && MDNS.txt(i, "id") == g_bridgeId) { pick = i; break; }
@@ -251,6 +362,7 @@ static bool pairLoop() {
     uint32_t t0 = millis();
     while (millis() - t0 < 9 * 60 * 1000UL) {
       waitMs(1500);
+      if (g_token.length()) return true;   // paired over USB meanwhile
       int sc = httpGet("/pair/status?req=" + req, body, false);
       if (sc != 200) { if (++failures > 6) return false; continue; }
       failures = 0;
@@ -327,6 +439,7 @@ static RunExit runLoop() {
   int failures = 0;
   for (;;) {
     checkResetButton();
+    checkSerial();
     Decision d;
     while (xQueueReceive(g_decQ, &d, 0) == pdTRUE) postDecision(d);
 
@@ -336,6 +449,7 @@ static RunExit runLoop() {
     bool ok = code == 200 && parseState(body, g_tmp);
 
     xSemaphoreTake(g_mtx, portMAX_DELAY);
+    g_mode = MODE_RUN;
     if (ok) {
       g_tmp.mode = MODE_RUN;
       g_tmp.setup = g_state.setup;

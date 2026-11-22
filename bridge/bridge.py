@@ -21,6 +21,9 @@ The bridge advertises itself over Bonjour as _claude-dash._tcp, so the display
 finds it without knowing the Mac's IP.
 """
 import argparse
+import glob
+import select
+import termios
 import atexit
 import json
 import os
@@ -64,6 +67,7 @@ def load_conf():
         "usage_poll_secs": 120,
         "bridge_id": secrets.token_hex(4),
         "devices": {},            # paired displays: name -> token
+        "usb_setup": True,        # give a plugged-in display your Wi-Fi + pairing over USB
     }
     changed = False
     for k, v in defaults.items():
@@ -115,6 +119,28 @@ def advertise(conf):
                              f"id={conf['bridge_id']}", "v=1"],
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     atexit.register(proc.terminate)
+
+
+DISCOVERY_UDP_PORT = 8788
+
+
+def udp_discovery_loop(conf):
+    """Answer 'CLAUDE-DASH?' broadcasts (fallback for networks where Bonjour doesn't get through)."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("0.0.0.0", DISCOVERY_UDP_PORT))
+    except OSError as e:
+        print(f"UDP discovery unavailable: {e}", flush=True)
+        return
+    reply = f"CLAUDE-DASH {conf['port']} {conf['bridge_id']}".encode()
+    while True:
+        try:
+            data, addr = sock.recvfrom(256)
+            if data.strip() == b"CLAUDE-DASH?":
+                sock.sendto(reply, addr)
+        except OSError:
+            time.sleep(1)
 
 
 def ascii_only(s):
@@ -182,6 +208,7 @@ class Dash:
         self.usage = {"ok": False, "error": "fetching..."}
         self.usage_at = 0
         self.pairings = {}   # req id -> {device, code, created, status, token}
+        self.usb_wifi_skip = {}  # device -> time before which we won't ask for the Wi-Fi password again
 
     # ---------- pairing ----------
     def pair_request(self, device, code):
@@ -355,6 +382,133 @@ class Dash:
                 if isinstance(w, dict) and w.get("resets_at"):
                     usage[k] = dict(w, resets_in=max(0, int(w["resets_at"] - now)))
         return {"ts": int(now), "clock": time.strftime("%H:%M"), "usage": usage, "sessions": sessions[:8], "pending": pending[:4]}
+
+
+# ---------------- USB setup ----------------
+MODE_PORTAL = 1  # matches DashMode in firmware/ClaudeDash/dash_state.h
+
+
+def serial_open(path):
+    fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+    a = termios.tcgetattr(fd)
+    a[0] = 0                                   # iflag
+    a[1] = 0                                   # oflag
+    a[2] = termios.CS8 | termios.CREAD | termios.CLOCAL
+    a[3] = 0                                   # lflag: raw
+    a[4] = a[5] = termios.B115200
+    termios.tcsetattr(fd, termios.TCSANOW, a)
+    return fd
+
+
+def serial_ask(fd, line, expect, timeout):
+    """Send a line, return the first received line starting with `expect`."""
+    termios.tcflush(fd, termios.TCIFLUSH)
+    os.write(fd, (line + "\n").encode())
+    buf, t0 = b"", time.time()
+    while time.time() - t0 < timeout:
+        r, _, _ = select.select([fd], [], [], 0.2)
+        if r:
+            try:
+                buf += os.read(fd, 4096)
+            except OSError:
+                pass
+            while b"\n" in buf:
+                raw, buf = buf.split(b"\n", 1)
+                txt = raw.decode(errors="replace").strip()
+                if txt.startswith(expect):
+                    return txt[len(expect):].strip()
+    return None
+
+
+def preferred_networks():
+    try:
+        out = subprocess.run(["networksetup", "-listpreferredwirelessnetworks", "en0"],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return []
+    return [ln.strip() for ln in out.splitlines()[1:] if ln.strip()]
+
+
+def wifi_password(ssid):
+    """Read a saved Wi-Fi password; macOS asks the user to authorize this."""
+    for args in (["-D", "AirPort network password", "-a", ssid],
+                 ["-s", "AirPort", "-a", ssid],
+                 ["-a", ssid]):
+        try:
+            r = subprocess.run(["security", "find-generic-password", *args, "-w"],
+                               capture_output=True, text=True, timeout=180)
+        except Exception:
+            continue
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.rstrip("\n")
+    return None
+
+
+def notify(title, msg):
+    if sys.platform == "darwin" and not os.environ.get("CLAUDE_DASH_NO_POPUP"):
+        subprocess.Popen(["osascript", "-e", f"display notification {json.dumps(msg)} with title {json.dumps(title)}"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def usb_setup_once(dash, path):
+    """Returns True if the port is a Claude Dash display we handled (or that needs nothing)."""
+    try:
+        fd = serial_open(path)
+    except OSError:
+        return False   # busy (serial monitor / upload) or gone
+    try:
+        hello = serial_ask(fd, "DASH?", "DASH HELLO", 2.0)
+        if not hello:
+            return False
+        info = json.loads(hello)
+        device = clip(ascii_only(str(info.get("device") or "display")), 32)
+        setup = {}
+        if not info.get("paired") or info.get("bid") != dash.conf["bridge_id"]:
+            tok = dash.conf["devices"].get(device) or secrets.token_urlsafe(18)
+            with dash.lock:
+                dash.conf["devices"][device] = tok
+                save_conf(dash.conf)
+            setup.update(token=tok, bid=dash.conf["bridge_id"])
+        if info.get("mode") == MODE_PORTAL and time.time() > dash.usb_wifi_skip.get(device, 0):
+            visible = set(info.get("ssids") or [])
+            ssid = next((n for n in preferred_networks() if n in visible), None)
+            if not ssid:
+                print(f"USB: {device} needs Wi-Fi, but none of this Mac's saved networks are visible to it", flush=True)
+            else:
+                notify("Claude Dash", f"Sharing Wi-Fi \"{ssid}\" with the display - approve the macOS prompt")
+                print(f"USB: sharing Wi-Fi '{ssid}' with {device} (macOS will ask to allow it)", flush=True)
+                pw = wifi_password(ssid)
+                if pw is None:
+                    dash.usb_wifi_skip[device] = time.time() + 600   # don't re-prompt every minute
+                    print("USB: couldn't read the Wi-Fi password (prompt denied?) - will ask again in 10 min", flush=True)
+                else:
+                    setup.update(ssid=ssid, **{"pass": pw})
+        if setup:
+            ok = serial_ask(fd, "DASH SETUP " + json.dumps(setup), "DASH OK", 3.0) is not None
+            what = " + ".join(k for k in ("ssid", "token") if k in setup).replace("ssid", "Wi-Fi").replace("token", "pairing")
+            print(f"USB: sent {what} to {device}: {'ok' if ok else 'no answer'}", flush=True)
+            if ok and "token" in setup:
+                notify("Claude Dash", f"Paired with {device} over USB")
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"USB: {path}: {e}", flush=True)
+        return False
+    finally:
+        os.close(fd)
+
+
+def usb_loop(dash):
+    """Watch for a display plugged into this Mac and set it up over the cable."""
+    checked = {}   # port -> time of last check
+    while True:
+        ports = set(glob.glob("/dev/cu.usbmodem*") + glob.glob("/dev/cu.wchusbserial*"))
+        for gone in set(checked) - ports:
+            del checked[gone]
+        for p in ports:
+            if time.time() - checked.get(p, 0) > 60:   # new device, or re-check a minute later
+                checked[p] = time.time()
+                usb_setup_once(dash, p)
+        time.sleep(3)
 
 
 # ---------------- usage fetching ----------------
@@ -617,6 +771,9 @@ def main():
         return
     srv.daemon_threads = True
     advertise(conf)
+    threading.Thread(target=udp_discovery_loop, args=(conf,), daemon=True).start()
+    if conf.get("usb_setup") and sys.platform == "darwin":
+        threading.Thread(target=usb_loop, args=(dash,), daemon=True).start()
     print(f"Claude Dash bridge on http://{lan_ip()}:{conf['port']} (Bonjour: _claude-dash._tcp)", flush=True)
     print(f"Open http://127.0.0.1:{conf['port']}/ for the preview and to approve pairing.", flush=True)
     try:

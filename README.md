@@ -31,8 +31,11 @@ The first time the bridge runs, expect two macOS prompts:
 
 ### 2. Display: first boot
 
+**Option A: plug it into your Mac with USB (easiest).** The bridge notices the display on the cable. It shares your Mac's Wi-Fi (macOS asks once for your password, to read the saved Wi-Fi password) and pairs it. There's no typing and no code. It picks the first of the Mac's saved networks that the display can see, so 5 GHz-only networks are skipped automatically.
+
+**Option B: phone + QR code.**
 1. **Wi-Fi.** The display shows a QR code. Scan it, or join **"Claude Dash Setup"** on your phone. A setup page opens; pick your Wi-Fi (2.4 GHz) and enter the password.
-2. **Find the Mac.** The display finds the bridge over Bonjour automatically. You don't need an IP address, and it keeps working if the Mac's IP changes.
+2. **Find the Mac.** The display finds the bridge by itself, using Bonjour or, if that doesn't get through, a LAN broadcast. You don't need an IP address, and it keeps working if the Mac's IP changes.
 3. **Pair.** The display shows a 4-digit code, and a page opens on your Mac with the same code. Click **Approve**. The display remembers the pairing.
 
 To start over, **hold BOOT for 5 seconds** while the display is running. It forgets the Wi-Fi and the pairing.
@@ -82,4 +85,5 @@ firmware/ClaudeDash/
 - **Security:** only localhost can post hook events or approve pairings. A display needs its paired token to read state or answer permission requests.
 - **Raising `decision_timeout`:** if you set it above ~55 s, also raise the `PermissionRequest` timeout in `hooks/hooks.json`.
 - **Demo mode:** `python3 bridge/bridge.py --demo` generates fake sessions and permission requests for testing the display.
-- **Networks that block Bonjour:** on guest or office Wi-Fi with client isolation, set `BRIDGE_HOST_OVERRIDE` in `config.h`.
+- **Discovery:** the bridge advertises `_claude-dash._tcp` over Bonjour and also answers UDP broadcasts on port 8788. On networks with client isolation, such as guest or office Wi-Fi, neither works; set `BRIDGE_HOST_OVERRIDE` in `config.h`.
+- **USB setup:** to turn it off, set `"usb_setup": false` in `~/.claude-dash/config.json`. Over the cable, the bridge sends `DASH?` and gets back `DASH HELLO {...}`; `DASH DIAG` prints the display's network diagnostics.
