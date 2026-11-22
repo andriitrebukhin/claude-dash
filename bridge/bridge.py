@@ -770,7 +770,7 @@ const u=s.usage,f=u.five_hour,w=u.seven_day;
 if(u.ok&&f){$('pct').textContent=Math.round(f.pct)+'%';$('sub').textContent='5-hour limit · resets '+dur(f.resets_in);
 $('a1').setAttribute('d',arc(226,f.pct));$('a1').setAttribute('stroke',f.pct>=90?'#E5544B':f.pct>=75?'#E8B04B':'#D97757')}else{$('pct').textContent='--';$('sub').textContent=u.error||'usage unavailable'}
 if(u.ok&&w){$('wk').textContent='Week '+Math.round(w.pct)+'% · resets '+dur(w.resets_in);$('a2').setAttribute('d',arc(206,w.pct))}
-$('list').innerHTML=s.sessions.length?s.sessions.map(x=>`<div class="row"><div class="dot" style="background:${col[x.state]||'#8A877D'}"></div><div class="nm">${esc(x.name)}</div><div class="dt">${esc(x.tool?x.tool+': '+x.detail:x.detail)}</div><div class="bd">${x.subagents?'+'+x.subagents+' agents':(word[x.state]||'')}</div></div>`).join(''):'<div style="text-align:center;color:#8A877D;margin-top:80px">No active Claude sessions</div>';
+$('list').innerHTML=s.sessions.length?s.sessions.map(x=>`<div class="row"><div class="dot" style="background:${col[x.state]||'#8A877D'}"></div><div class="nm">${esc(x.name)}</div><div class="dt">${esc(x.tool?x.tool+': '+x.detail:x.detail)}</div><div class="bd">${x.subagents?'+'+x.subagents+(x.subagents>1?' agents':' agent'):(word[x.state]||'')}</div></div>`).join(''):'<div style="text-align:center;color:#8A877D;margin-top:80px">No active Claude sessions</div>';
 const working=s.sessions.filter(x=>x.state=='working').length;
 $('st').textContent=new Date().toTimeString().slice(0,5)+' · '+working+' working';
 const p=s.pending.find(p=>!sent[p.id]);

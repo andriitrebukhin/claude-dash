@@ -2,6 +2,12 @@
 
 A desk display for Claude Code on the Waveshare **ESP32-S3-Touch-LCD-2.1** (480×480 round touchscreen).
 
+<p align="center">
+  <img src="docs/dashboard.png" width="360" alt="Dashboard: 5-hour and weekly usage rings with three Claude Code sessions">
+  <img src="docs/permission.png" width="360" alt="Permission card: a Bash command with Deny and Allow buttons">
+</p>
+<p align="center"><sub>Rendered with the bridge's browser preview (demo data). The device draws the same layout in LVGL.</sub></p>
+
 - **Usage rings**: the outer ring is the 5-hour limit, the inner ring is the weekly limit. Each shows a reset countdown.
 - **Sessions**: one row per Claude Code session, showing the project folder, what it's doing (tool and command or file), and how many subagents it's running. The dot shows the state: green = working, orange = needs you, amber = waiting, grey = idle.
 - **Decisions**: when Claude Code asks for permission, the display chirps and shows a full-screen **Allow / Deny** card. If you don't answer within the timeout (30 s by default), the normal terminal prompt takes over.
@@ -89,6 +95,7 @@ arduino-cli upload  --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,Partitio
 .claude-plugin/          plugin + marketplace manifests (plugin name: desk-display)
 hooks/hooks.json         Claude Code hooks -> bridge/claude_dash_hook.py
 LICENSE                  MIT
+docs/                    README screenshots
 bridge/
   bridge.py              hook events, usage polling, Bonjour advert, pairing, /state, /decision, preview page
   claude_dash_hook.py    runs on each hook event; starts the bridge if it isn't running
