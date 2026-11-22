@@ -56,7 +56,7 @@ jobs:
           body: |
             ## Flash the display
 
-            **Easiest: one click in Chrome or Edge:** https://andriitrebukhin.github.io/claude-dash/ installs the firmware and sets up Wi-Fi.
+            **Easiest: one click in Chrome or Edge:** https://andrii.is-a.dev/claude-dash/ installs the firmware and sets up Wi-Fi.
 
             **Or manually:** download `claude-dash-${{ github.ref_name }}-full.bin`, open https://espressif.github.io/esptool-js/, connect, and program it at `0x0`.
 

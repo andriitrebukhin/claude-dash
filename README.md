@@ -55,7 +55,7 @@ The first time the bridge runs, expect these macOS prompts:
 
 ### 2. Display: flash the firmware
 
-**One click: [andriitrebukhin.github.io/claude-dash](https://andriitrebukhin.github.io/claude-dash/)** in Chrome or Edge. Click **Install Claude Dash**, pick the board's port, and when it finishes, enter your Wi-Fi on the same page. Nothing to install.
+**One click: [andrii.is-a.dev/claude-dash](https://andrii.is-a.dev/claude-dash/)** in Chrome or Edge. Click **Install Claude Dash**, pick the board's port, and when it finishes, enter your Wi-Fi on the same page. Nothing to install.
 
 Or flash a file from the [latest release](https://github.com/andriitrebukhin/claude-dash/releases/latest) yourself:
 
