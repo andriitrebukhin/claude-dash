@@ -11,6 +11,8 @@ FULL="$ROOT/dist/claude-dash-$VERSION-full.bin"
 rm -rf "$SITE" && mkdir -p "$SITE/firmware"
 cp "$ROOT/site/index.html" "$SITE/"
 cp "$ROOT/docs/dashboard.png" "$SITE/"
+cp "$ROOT/site/stand.html" "$SITE/"
+cp "$ROOT/case/renders/ribbon_hero.png" "$ROOT/case/renders/halo_hero.png" "$SITE/"
 cp "$FULL" "$SITE/firmware/claude-dash-full.bin"
 cat > "$SITE/manifest.json" <<JSON
 {

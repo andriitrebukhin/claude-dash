@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Dash Stand</title>
+<meta name="description" content="Ribbon, a 3D-printable desk stand for the Claude Dash display. Support-free on a Bambu Lab A1 mini.">
+<style>
+  :root {
+    --bg: #FAF9F5; --card: #F0EEE6; --text: #141413; --muted: #6B6A64; --line: #E3DACC;
+    --accent: #D77757; --accent-ink: #FFFFFF; --code: #EDEAE0; --render: #F4F3EF;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #141413; --card: #1F1E1D; --text: #FAF9F5; --muted: #A3A29B; --line: #30302E; --code: #262624;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #141413; --card: #1F1E1D; --text: #FAF9F5; --muted: #A3A29B; --line: #30302E; --code: #262624;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 40px 16px 64px; }
+  .back { font-size: 14px; text-decoration: none; }
+  h1 { font-size: 38px; line-height: 1.1; margin: 18px 0 8px; letter-spacing: -0.015em; }
+  .lede { color: var(--muted); margin: 0 0 22px; max-width: 600px; font-size: 17px; }
+  .hero { border-radius: 20px; overflow: hidden; background: var(--render); border: 1px solid var(--line); }
+  .hero img { display: block; width: 100%; height: auto; }
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; margin: 22px 0 6px; }
+  .btn { display: inline-block; background: var(--accent); color: var(--accent-ink); border-radius: 999px;
+         padding: 12px 22px; font-weight: 600; text-decoration: none; }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 26px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px; }
+  h2 { font-size: 20px; margin: 34px 0 12px; }
+  h3 { font-size: 16px; margin: 0 0 6px; }
+  p { margin: 6px 0; }
+  ul { margin: 6px 0; padding-left: 20px; }
+  li { margin: 3px 0; }
+  .muted { color: var(--muted); font-size: 14px; }
+  ol.steps { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+  .steps > li { counter-increment: s; background: var(--card); border: 1px solid var(--line);
+                border-radius: 16px; padding: 18px 20px 18px 62px; position: relative; margin-bottom: 12px; }
+  .steps > li::before { content: counter(s); position: absolute; left: 18px; top: 17px; width: 30px; height: 30px;
+                        border-radius: 50%; background: var(--accent); color: var(--accent-ink);
+                        display: grid; place-items: center; font-weight: 600; font-size: 15px; }
+  code { font: 13.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code); border-radius: 6px; padding: 1px 5px; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  td, th { text-align: left; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  .alt { display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: center; }
+  .alt img { width: 100%; border-radius: 12px; background: var(--render); }
+  @media (max-width: 560px) { .alt { grid-template-columns: 1fr; } }
+  a { color: var(--accent); }
+  footer { margin-top: 36px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <a class="back" href="./">&larr; Install Claude Dash</a>
+  <h1>Ribbon</h1>
+  <p class="lede">A desk stand for the Claude Dash display: one bent band, in the spirit of the Apple Studio Display stand.
+    It prints without supports on a Bambu Lab A1 mini, all on one plate.</p>
+
+  <div class="hero"><img src="ribbon_hero.png" alt="Ribbon stand with the round display, front and side views, in white and space grey"></div>
+
+  <div class="actions">
+    <a class="btn" href="https://github.com/andriitrebukhin/claude-dash/raw/main/case/3mf/claude_dash_ribbon_kit.3mf">Download the plate (3MF)</a>
+    <a class="btn ghost" href="https://github.com/andriitrebukhin/claude-dash/raw/main/case/stl/fit_test.stl">Fit test (STL)</a>
+    <a class="btn ghost" href="https://github.com/andriitrebukhin/claude-dash/tree/main/case">All files</a>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h3>In the box</h3>
+      <ul>
+        <li><b>Puck</b>: holds the display</li>
+        <li><b>Bezel ring</b>: black, press-fits over the glass edge</li>
+        <li><b>Stand</b>: one bent band</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>You'll also need</h3>
+      <ul>
+        <li>3 &times; 10 mm silicone bumpers for the foot</li>
+        <li>4 &times; 6&times;2 mm magnets, 2 in the puck and 2 in the stand (optional; glue works too)</li>
+        <li>A USB-C cable, plug body up to 13 &times; 7.5 mm</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Size</h3>
+      <p>The screen sits about 8 cm up, leaning back 15&deg;. The footprint is about 9 &times; 5 cm.</p>
+      <p class="muted">Puck &Oslash;86 &times; 17.6 mm</p>
+    </div>
+  </div>
+
+  <h2>Make it</h2>
+  <ol class="steps">
+    <li>
+      <h3>Check the fit (15 minutes)</h3>
+      <p>Print the <a href="https://github.com/andriitrebukhin/claude-dash/raw/main/case/stl/fit_test.stl">fit test</a>, the front
+        slice of the puck. The display should drop in without force or wobble, and the ring should press in and stay.
+        If not, adjust <code>FIT</code>, <code>RING_FIT</code> or <code>MODULE_DEPTH</code> in the
+        <a href="https://github.com/andriitrebukhin/claude-dash/blob/main/case/claude_dash_case.py">model</a> and rebuild.</p>
+    </li>
+    <li>
+      <h3>Print the plate</h3>
+      <p>Open the 3MF in Bambu Studio. Everything is already oriented, so no supports are needed. Give the ring black
+        filament (with the AMS lite), or print it separately in black.</p>
+      <table>
+        <tr><th>Part</th><th>Settings</th></tr>
+        <tr><td>Puck</td><td>0.2 mm layers, 3 walls, 15% gyroid</td></tr>
+        <tr><td>Stand</td><td>0.2 mm layers, 4 walls, 40% infill</td></tr>
+        <tr><td>Ring</td><td>0.12 mm layers, 100% infill, black</td></tr>
+      </table>
+      <p class="muted">Matte white or grey PLA looks the most like Apple aluminium. PETG works too.</p>
+    </li>
+    <li>
+      <h3>Assemble</h3>
+      <ul>
+        <li>Put the display into the puck from the front, with the USB-C ports at the bottom (they line up with the slots).</li>
+        <li>Press the ring in.</li>
+        <li>Fit the magnets (matching polarity) or glue the puck onto the stand. The slot on the back locates it.</li>
+        <li>Press the bumpers into the three recesses under the foot.</li>
+        <li>Plug the cable into the <b>USB</b> port: bottom right, as you look at the screen.</li>
+      </ul>
+      <p class="muted">BOOT and RESET are behind the two pinholes on the right edge; use a SIM tool.</p>
+    </li>
+  </ol>
+
+  <h2>Prefer a base?</h2>
+  <div class="card alt">
+    <img src="halo_hero.png" alt="Halo stand: round base with one slim fin">
+    <div>
+      <h3>Halo</h3>
+      <p>A round, weighted base with one slim fin, closer to an iMac G4 or the Apple Watch stand. It uses the same puck and
+        ring, and it's sturdier on the desk.</p>
+      <p><a href="https://github.com/andriitrebukhin/claude-dash/raw/main/case/stl/halo_stand.stl">Halo stand (STL)</a> &middot;
+        <a href="https://github.com/andriitrebukhin/claude-dash/raw/main/case/stl/puck.stl">Puck</a> &middot;
+        <a href="https://github.com/andriitrebukhin/claude-dash/raw/main/case/stl/ring.stl">Ring</a></p>
+    </div>
+  </div>
+
+  <footer>
+    The model is parametric (Python with build123d), and STEP files are included for Fusion, Onshape or FreeCAD.
+    Print guide: <a href="https://github.com/andriitrebukhin/claude-dash/blob/main/case/README.md">case/README.md</a>.
+  </footer>
+</main>
+</body>
+</html>

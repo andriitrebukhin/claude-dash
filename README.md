@@ -89,6 +89,18 @@ If you used the browser installer and entered your Wi-Fi there, skip to **Pair**
 
 To start over, **hold BOOT for 5 seconds** while the display is running. It forgets the Wi-Fi and all pairings.
 
+## Print a desk stand
+
+<p align="center"><img src="case/renders/concept_ribbon.png" width="720" alt="Ribbon stand: the round display on a single bent band"></p>
+
+**Ribbon** is a 3D-printable stand: a puck holds the display behind a black bezel ring, on one bent band in the style of the Apple Studio Display stand.
+- **No supports:** everything prints support-free on a Bambu Lab A1 mini.
+- **One plate:** open [`case/3mf/claude_dash_ribbon_kit.3mf`](case/3mf/claude_dash_ribbon_kit.3mf) in Bambu Studio and slice.
+- **Extra parts:** two 6 × 2 mm magnets (optional) and three 10 mm silicone bumpers for the foot.
+- **Fit test first:** print the 15-minute fit test before the full plate.
+
+Step-by-step page: **[andrii.is-a.dev/claude-dash/stand.html](https://andrii.is-a.dev/claude-dash/stand.html)**. There's also a second design, **Halo** (a round base with one slim fin). Print settings, the fit check and assembly are in [case/README.md](case/README.md). The model is parametric (Python/build123d), and STEP files are included for Fusion, Onshape or FreeCAD.
+
 ## Building the firmware
 
 There's nothing to configure before flashing. `config.h` has no secrets, so one build works for any Wi-Fi and any Mac.
@@ -121,9 +133,12 @@ arduino-cli upload  --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,Partitio
 .claude-plugin/          plugin + marketplace manifests (plugin name: desk-display)
 hooks/hooks.json         Claude Code hooks -> bridge/claude_dash_hook.py
 scripts/build-firmware.sh  reproducible firmware build -> dist/*.bin (used by CI releases)
-scripts/build-site.sh    browser installer -> _site/ (GitHub Pages)
+scripts/build-site.sh    site -> _site/ (GitHub Pages: installer + stand page)
 site/index.html          the installer page
+site/stand.html          the desk stand page
+.github/workflows/site.yml  redeploys the site when it changes (firmware from the latest release)
 .github/workflows/       firmware release workflow (on v* tags)
+case/                    3D-printable stands: model, STL/3MF/STEP, renders, print guide
 LICENSE                  MIT
 docs/                    README screenshots
 bridge/

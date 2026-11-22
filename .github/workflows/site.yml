@@ -1,0 +1,54 @@
+name: Site
+
+# Rebuilds the GitHub Pages site (installer + stand page) when the pages or the
+# case renders change, using the firmware from the latest release. Releases
+# (v* tags) also deploy the site from firmware.yml with freshly built firmware.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "case/renders/**"
+      - "docs/dashboard.png"
+      - "scripts/build-site.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Firmware from the latest release
+        id: fw
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag=$(gh release view --json tagName --jq .tagName)
+          mkdir -p dist
+          gh release download "$tag" --pattern "claude-dash-$tag-full.bin" --dir dist
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build site
+        run: scripts/build-site.sh
+        env:
+          VERSION: ${{ steps.fw.outputs.tag }}
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
