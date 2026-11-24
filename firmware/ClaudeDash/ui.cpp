@@ -58,7 +58,7 @@
 
 struct Row { lv_obj_t *box, *dot, *name, *detail, *badge; };
 
-static lv_obj_t *arc5, *arcWeek, *lblPct, *lblSub, *lblWeek, *list, *lblEmpty, *lblStatus, *lblVersion;
+static lv_obj_t *arc5, *arcWeek, *lblPct, *lblSub, *lblWeek, *list, *lblEmpty, *lblStatus, *lblVersion, *lblClock;
 static int wifiPct = -1;   // signal strength 0..100, -1 = not connected
 
 // Wi-Fi signal in percent: -50 dBm or better = 100 %, -100 dBm = 0 %.
@@ -384,7 +384,7 @@ static void onUpdateNow(lv_event_t *) {
 static void buildUpdateUi(lv_obj_t *scr) {
   btnUpdatePill = lv_btn_create(scr);
   lv_obj_set_size(btnUpdatePill, 220, 30);
-  lv_obj_align(btnUpdatePill, LV_ALIGN_BOTTOM_MID, 0, -70);
+  lv_obj_align(btnUpdatePill, LV_ALIGN_TOP_MID, 0, 316);
   lv_obj_set_style_radius(btnUpdatePill, 15, 0);
   lv_obj_set_style_bg_color(btnUpdatePill, C_CARD, 0);
   lv_obj_set_style_border_color(btnUpdatePill, C_ACCENT, 0);
@@ -459,7 +459,7 @@ void ui_init() {
   lv_obj_align(lblWeek, LV_ALIGN_TOP_MID, 0, 132);
 
   list = lv_obj_create(scr);
-  lv_obj_set_size(list, 330, 200);
+  lv_obj_set_size(list, 330, 186);
   lv_obj_align(list, LV_ALIGN_TOP_MID, 0, 164);
   lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(list, 0, 0);
@@ -508,15 +508,19 @@ void ui_init() {
 
   lblStatus = label(scr, F_S, C_MUTED);
   lv_label_set_recolor(lblStatus, true);
-  lv_obj_set_width(lblStatus, 300);
+  lv_obj_set_width(lblStatus, 280);
   lv_obj_set_style_text_align(lblStatus, LV_TEXT_ALIGN_CENTER, 0);
   lv_label_set_long_mode(lblStatus, LV_LABEL_LONG_DOT);
-  lv_obj_align(lblStatus, LV_ALIGN_BOTTOM_MID, 0, -46);
+  lv_obj_align(lblStatus, LV_ALIGN_BOTTOM_MID, 0, -50);
+
+  lblClock = label(scr, F_L, C_TEXT);         // big clock on its own line, above the status line
+  lv_label_set_text(lblClock, "--:--");
+  lv_obj_align(lblClock, LV_ALIGN_TOP_MID, 0, 360);
 
   lblVersion = label(scr, F_XS, C_TRACK);    // firmware version, quietly at the very bottom
   lv_obj_set_style_text_color(lblVersion, lv_color_hex(0x5E5D58), 0);
   lv_label_set_text(lblVersion, DASH_VERSION);
-  lv_obj_align(lblVersion, LV_ALIGN_BOTTOM_MID, 0, -26);
+  lv_obj_align(lblVersion, LV_ALIGN_BOTTOM_MID, 0, -28);
 
   buildUpdateUi(scr);
 
@@ -779,7 +783,7 @@ static void renderDashboard(const DashState &s) {
   for (int i = 0; i < MAX_BRIDGES; i++) {
     if (nPages < 2 || i >= nPages) { lv_obj_add_flag(pageDots[i], LV_OBJ_FLAG_HIDDEN); continue; }
     lv_obj_clear_flag(pageDots[i], LV_OBJ_FLAG_HIDDEN);
-    lv_obj_align(pageDots[i], LV_ALIGN_TOP_MID, (i - (nPages - 1) / 2.0f) * 16, 368);
+    lv_obj_align(pageDots[i], LV_ALIGN_TOP_MID, (i - (nPages - 1) / 2.0f) * 16, 352);
     lv_color_t c = i == curPage ? C_TEXT : attention[i] ? C_AMBER : C_TRACK;
     lv_obj_set_style_bg_color(pageDots[i], c, 0);
   }
@@ -792,10 +796,10 @@ void ui_tick() {
   const char *dotColor = linkOk ? "4EBA65" : wifiOk ? "FFC107" : "FF6B80";
   char sig[8] = "";
   if (wifiPct >= 0) snprintf(sig, sizeof(sig), " %d%%", wifiPct);
+  lv_label_set_text(lblClock, clockText);
   if (pageHost[0])
-    lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "%s#  %.12s - %s - %d working", dotColor, sig, pageHost,
-                          clockText, workingCount);
-  else
-    lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "%s#  %s  -  %d working", dotColor, sig, clockText,
+    lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "%s#  %.14s  -  %d working", dotColor, sig, pageHost,
                           workingCount);
+  else
+    lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "%s#  %d working", dotColor, sig, workingCount);
 }
