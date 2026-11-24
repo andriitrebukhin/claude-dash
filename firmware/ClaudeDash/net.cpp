@@ -809,6 +809,7 @@ static void publish(bool anyOk, uint8_t nOk) {
   g_tmp.mode = MODE_RUN;
   g_tmp.setup = g_state.setup;
   g_tmp.wifiOk = WiFi.status() == WL_CONNECTED;
+  g_tmp.rssi = g_tmp.wifiOk ? WiFi.RSSI() : 0;
   g_tmp.bridgeOk = anyOk;
   g_tmp.nBridges = g_nbr;
   g_tmp.nBridgesOk = nOk;

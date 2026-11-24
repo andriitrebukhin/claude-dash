@@ -75,6 +75,7 @@ struct DashState {
   uint8_t mode;
   SetupInfo setup;
   bool wifiOk;
+  int8_t rssi;         // Wi-Fi signal, dBm (0 = not connected)
   bool bridgeOk;
   char clock[8];     // HH:MM from the Mac
   uint8_t nSessions;

@@ -35,6 +35,11 @@
 #else
   #define F_S LV_FONT_DEFAULT
 #endif
+#if LV_FONT_MONTSERRAT_12
+  #define F_XS &lv_font_montserrat_12
+#else
+  #define F_XS F_S
+#endif
 
 // ---------- palette: Claude colors ----------
 // Neutrals and accents from Anthropic's brand palette; status colors from Claude Code's theme.
@@ -53,7 +58,11 @@
 
 struct Row { lv_obj_t *box, *dot, *name, *detail, *badge; };
 
-static lv_obj_t *arc5, *arcWeek, *lblPct, *lblSub, *lblWeek, *list, *lblEmpty, *lblStatus;
+static lv_obj_t *arc5, *arcWeek, *lblPct, *lblSub, *lblWeek, *list, *lblEmpty, *lblStatus, *lblVersion;
+static int wifiPct = -1;   // signal strength 0..100, -1 = not connected
+
+// Wi-Fi signal in percent: -50 dBm or better = 100 %, -100 dBm = 0 %.
+static int rssiToPct(int rssi) { return rssi == 0 ? -1 : constrain(2 * (rssi + 100), 0, 100); }
 static Row rows[MAX_SESSIONS];
 static lv_obj_t *setupScr, *lblSetupTitle, *lblSetupBig, *lblSetupSub, *lblSetupHint, *qr;
 static char lastQr[96] = "";
@@ -499,7 +508,15 @@ void ui_init() {
 
   lblStatus = label(scr, F_S, C_MUTED);
   lv_label_set_recolor(lblStatus, true);
+  lv_obj_set_width(lblStatus, 300);
+  lv_obj_set_style_text_align(lblStatus, LV_TEXT_ALIGN_CENTER, 0);
+  lv_label_set_long_mode(lblStatus, LV_LABEL_LONG_DOT);
   lv_obj_align(lblStatus, LV_ALIGN_BOTTOM_MID, 0, -46);
+
+  lblVersion = label(scr, F_XS, C_TRACK);    // firmware version, quietly at the very bottom
+  lv_obj_set_style_text_color(lblVersion, lv_color_hex(0x5E5D58), 0);
+  lv_label_set_text(lblVersion, DASH_VERSION);
+  lv_obj_align(lblVersion, LV_ALIGN_BOTTOM_MID, 0, -26);
 
   buildUpdateUi(scr);
 
@@ -593,6 +610,7 @@ void ui_init() {
 void ui_update(const DashState &s) {
   wifiOk = s.wifiOk;
   linkOk = s.bridgeOk;
+  wifiPct = s.wifiOk ? rssiToPct(s.rssi) : -1;
   macsPaired = s.nBridges;
   macsOk = s.nBridgesOk;
   if (s.clock[0]) strlcpy(clockText, s.clock, sizeof(clockText));
@@ -772,9 +790,12 @@ void ui_tick() {
   if (millis() - last < 1000) return;
   last = millis();
   const char *dotColor = linkOk ? "4EBA65" : wifiOk ? "FFC107" : "FF6B80";
+  char sig[8] = "";
+  if (wifiPct >= 0) snprintf(sig, sizeof(sig), " %d%%", wifiPct);
   if (pageHost[0])
-    lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "#  %.14s  -  %s  -  %d working", dotColor, pageHost, clockText,
-                          workingCount);
+    lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "%s#  %.12s - %s - %d working", dotColor, sig, pageHost,
+                          clockText, workingCount);
   else
-    lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "#  %s  -  %d working", dotColor, clockText, workingCount);
+    lv_label_set_text_fmt(lblStatus, "#%s " LV_SYMBOL_WIFI "%s#  %s  -  %d working", dotColor, sig, clockText,
+                          workingCount);
 }
