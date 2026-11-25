@@ -114,6 +114,8 @@ def start_bridge():
 
 
 def main():
+    if os.environ.get("CLAUDE_DASH_SKIP"):      # the bridge's own `claude -p /usage` refresh runs
+        return
     try:
         raw = sys.stdin.read()
         ev = json.loads(raw)

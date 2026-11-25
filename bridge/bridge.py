@@ -700,7 +700,8 @@ def firmware_loop(dash):
 
 
 # ---------------- usage fetching ----------------
-def read_oauth_token():
+def read_oauth():
+    """Claude Code's sign-in from the Keychain: (access token, expiry as unix time or 0)."""
     raw = None
     if sys.platform == "darwin":
         r = subprocess.run(["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
@@ -713,7 +714,43 @@ def read_oauth_token():
             raw = f.read_text()
     if not raw:
         raise RuntimeError("no Claude Code login found")
-    return json.loads(raw)["claudeAiOauth"]["accessToken"]
+    o = json.loads(raw)["claudeAiOauth"]
+    return o["accessToken"], (o.get("expiresAt") or 0) / 1000
+
+
+CLI_REFRESH_GAP = 600       # at most one refresh attempt every 10 minutes
+_last_cli_refresh = [0.0]
+
+
+def claude_cli(conf):
+    """Path to the `claude` command (launchd starts us with a minimal PATH)."""
+    import shutil
+    for c in (conf.get("claude_bin"), shutil.which("claude"),
+              str(Path.home() / ".local/bin/claude"), "/opt/homebrew/bin/claude", "/usr/local/bin/claude"):
+        if c and Path(c).exists():
+            return c
+    return None
+
+
+def refresh_via_cli(conf):
+    """Let Claude Code refresh its own sign-in: `claude -p /usage` runs no model, costs nothing, and
+    renews the short-lived token in the Keychain as a side effect. We never write credentials ourselves."""
+    if time.time() - _last_cli_refresh[0] < CLI_REFRESH_GAP:
+        return False
+    _last_cli_refresh[0] = time.time()
+    cli = claude_cli(conf)
+    if not cli:
+        print("Usage: Claude Code sign-in expired and the `claude` command wasn't found", flush=True)
+        return False
+    env = dict(os.environ, CLAUDE_DASH_SKIP="1")      # keep this run off the display
+    try:
+        subprocess.run([cli, "-p", "/usage"], cwd=str(Path.home()), env=env, stdin=subprocess.DEVNULL,
+                       capture_output=True, timeout=120)
+    except Exception as e:  # noqa: BLE001
+        print(f"Usage: refreshing the Claude Code sign-in failed: {clip(str(e), 60)}", flush=True)
+        return False
+    print("Usage: asked Claude Code to refresh its sign-in", flush=True)
+    return True
 
 
 def parse_window(w):
@@ -730,12 +767,14 @@ def parse_window(w):
 
 
 def usage_loop(dash):
-    token = None
+    token, expires = None, 0.0
     backoff = 0
     while True:
         try:
-            if token is None:
-                token = read_oauth_token()
+            if token is None or (expires and expires - time.time() < 60):
+                token, expires = read_oauth()
+                if expires and expires - time.time() < 60 and refresh_via_cli(dash.conf):
+                    token, expires = read_oauth()
             req = urllib.request.Request(USAGE_URL, headers={
                 "Authorization": f"Bearer {token}",
                 "anthropic-beta": "oauth-2025-04-20",
@@ -755,8 +794,10 @@ def usage_loop(dash):
             backoff = 0
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
-                token = None  # Claude Code refreshes its token when you use it; re-read next time
-                dash.set_usage({"ok": False, "error": "login expired - open Claude Code"})
+                token = None
+                if refresh_via_cli(dash.conf):
+                    continue                     # fresh token in the Keychain: try again right away
+                dash.set_usage({"ok": False, "error": "Sign in to Claude Code"})
             else:
                 dash.set_usage({"ok": False, "error": f"usage API HTTP {e.code}"})
                 if e.code == 429:
