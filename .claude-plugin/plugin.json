@@ -1,6 +1,6 @@
 {
   "name": "desk-display",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "Desk display for Claude Code: usage limits, live sessions, and Allow/Deny from a touchscreen.",
   "keywords": [
     "esp32",
