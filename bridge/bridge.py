@@ -50,6 +50,7 @@ CONF_FILE = CONF_DIR / "config.json"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
 IDLE_PRUNE_SECS = 2 * 3600     # drop sessions with no events for this long
+FINISHED_SECS = 10 * 60        # "finished, your turn" shows amber this long, then idle
 STALE_WORKING_SECS = 15 * 60   # "working" with no events this long -> idle
 
 
@@ -221,6 +222,63 @@ def clip(s, n):
     return s if len(s) <= n else s[: n - 3] + "..."
 
 
+def _plain(text):
+    """Markdown-ish line -> plain text for the display."""
+    import re
+    text = re.sub(r"[*_`#>]+", "", text)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)      # [label](url) -> label
+    return " ".join(text.split())
+
+
+def question_from_turn(ev):
+    """If Claude ended its turn by asking something, return that question (else None).
+    Looks at the desktop app's next-step box ("ask") first, then the last message's final paragraph."""
+    text = ev.get("last_assistant_message") if isinstance(ev.get("last_assistant_message"), str) else ""
+    path = ev.get("transcript_path")
+    if not text and path:
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - 400_000))
+                lines = f.read().decode(errors="replace").splitlines()
+            for line in reversed(lines):          # back to the start of this turn
+                try:
+                    e = json.loads(line)
+                except ValueError:
+                    continue
+                content = (e.get("message") or {}).get("content")
+                if e.get("type") == "user":
+                    if isinstance(content, str) or not any(
+                            isinstance(c, dict) and c.get("type") == "tool_result" for c in content or []):
+                        break                          # your last prompt: the turn started here
+                    continue
+                if e.get("type") != "assistant" or not isinstance(content, list):
+                    continue
+                for c in content:
+                    if (isinstance(c, dict) and c.get("type") == "tool_use"
+                            and str(c.get("name", "")).endswith("wrap_up")
+                            and isinstance(c.get("input"), dict) and c["input"].get("ask")):
+                        return _plain(c["input"]["ask"])      # the next-step box question
+                if not text:
+                    parts = [c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"]
+                    if any(p.strip() for p in parts):
+                        text = "\n".join(parts)
+        except OSError:
+            return None
+    paragraphs = [p for p in text.strip().split("\n\n") if p.strip()]
+    if not paragraphs:
+        return None
+    last = [ln for ln in paragraphs[-1].splitlines() if ln.strip()]
+    for ln in reversed(last):
+        if "?" in ln:
+            q = _plain(ln)
+            # keep just the question sentence if the line has several
+            end = q.rfind("?")
+            start = max(q.rfind(". ", 0, end), q.rfind("! ", 0, end))
+            return q[start + 2 if start >= 0 else 0:end + 1].strip() or None
+    return None
+
+
 class Dash:
     def __init__(self, conf):
         self.conf = conf
@@ -323,7 +381,11 @@ class Dash:
                 s.update(state="idle", tool="", detail="session started")
             elif name == "UserPromptSubmit":
                 self._cancel_pending(sid)
-                s.update(state="working", tool="", detail=clip(ev.get("prompt", ""), 90))
+                s.update(state="working", tool="", detail=clip(ev.get("prompt", ""), 90), ask=None, waiting=None)
+            elif name == "PreToolUse" and tool.endswith("wrap_up") and isinstance(ev.get("tool_input"), dict):
+                # the desktop app's next-step box: its "ask" is the question you'll see under the reply
+                ask = ev["tool_input"].get("ask")
+                s["ask"] = _plain(ask) if isinstance(ask, str) and ask.strip() else None
             elif name == "PreToolUse":
                 s.update(state="working", tool=tool_label(tool),
                          detail=clip(summarize_tool(tool, ev.get("tool_input")), 90))
@@ -336,11 +398,16 @@ class Dash:
                     s["subagents"] = max(0, s["subagents"] - 1)
             elif name == "Notification":
                 msg = ev.get("message", "")
-                if "permission" not in msg.lower():
+                if "permission" not in msg.lower() and s.get("waiting") != "ask":
                     s.update(state="waiting", detail=clip(msg, 90))
             elif name == "Stop":
                 self._cancel_pending(sid)
-                s.update(state="idle", tool="", subagents=0, detail="finished - waiting for you")
+                ask = s.get("ask") or question_from_turn(ev)
+                if ask:   # it ended its turn with a question: amber until you reply
+                    s.update(state="waiting", tool="", subagents=0, detail=clip("Asks: " + ask, 90), waiting="ask")
+                else:     # done: amber "your turn" for a while, then idle
+                    s.update(state="waiting", tool="", subagents=0, detail="Finished - your turn", waiting="done")
+                s["ask"] = None
 
     def wait_permission(self, ev):
         """Block until the display answers. Returns None (no decision -> normal prompt)
@@ -416,6 +483,8 @@ class Dash:
                     del self.sessions[sid]
                 elif s["state"] == "working" and now - s["last"] > STALE_WORKING_SECS:
                     s.update(state="idle", tool="", subagents=0)
+                elif s.get("waiting") == "done" and now - s["last"] > FINISHED_SECS:
+                    s.update(state="idle", detail="finished", waiting=None)
             pend_sids = {p["sid"] for p in self.pending.values()}
             order = {"decision": 0, "working": 1, "waiting": 2, "idle": 3}
             sessions = []
